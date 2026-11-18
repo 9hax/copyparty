@@ -39,6 +39,7 @@ Ls.chi = {
 			["ctrl-V", "粘贴（移动/复制）到此处"],
 			["Y", "下载选中项"],
 			["F2", "重命名选中项"],
+			["F4", "刷新"], //m
 
 			"文件列表选择",
 			["space", "切换文件选择"],
@@ -573,9 +574,10 @@ Ls.chi = {
 	"u_https1": "你应该",
 	"u_https2": "切换到 https",
 	"u_https3": "以获得更好的性能",
-	"u_ancient": '你还在用远古浏览器，也许你应该 <a href="#" onclick="goto(\'bup\')">改用 bup</a>',
+	"u_ancient": '你还在用远古浏览器，也许你应该 <a href="#" id="u2nah">改用 bup</a>',
 	"u_nowork": "需要 Firefox 53+ 或 Chrome 57+ 或 iOS 11+",
 	"tail_2old": "需要 Firefox 105+ 或 Chrome 71+ 或 iOS 14.5+",
+	"b2old": '浏览器版本太低', //m
 	"u_nodrop": '浏览器版本低，不支持通过拖动文件到窗口来上传文件',
 	"u_notdir": "这不是文件夹！\n\n你的浏览器太老了，\n请尝试将文件夹拖入窗口",
 	"u_uri": "要从其他浏览器窗口拖放图片，\n请将其拖放到大上传按钮上",
@@ -659,6 +661,7 @@ Ls.chi = {
 	"rc_pla": "作为音频播放",
 	"rc_txt": "在文本文件查看器中打开",
 	"rc_md": "在 markdown 查看器中打开",
+	"rc_wopi": "在 office 编辑器中打开", //m
 	"rc_dl": "下载",
 	"rc_zip": "下载为压缩包",
 	"rc_cpl": "复制链接",

@@ -16,7 +16,7 @@ uname -s | grep WOW64 && m=64 || m=32
 uname -s | grep NT-10 && w10=1 || w7=1
 [ $w7 ] && [ -e up2k.sh ] && [ ! "$1" ] && ./up2k.sh
 
-[ $w7 ] && pyv=37 || pyv=313
+[ $w7 ] && pyv=37 || pyv=314
 [ $w7 ] && sfx=en || sfx=sfx
 esuf=
 [ $w7 ] && [ $m = 32 ] && esuf=32
@@ -42,6 +42,7 @@ dl https://192.168.123.1:3923/cpp/scripts/pyinstaller/loader.rc
     [ $st_en ] && [ $st_en -ge $st_sfx ] || sfx=sfx
 }
 
+export PRTY_XD=$TEMP
 rm -rf $TEMP/pe-copyparty*
 python copyparty-$sfx.py --version
 
@@ -58,6 +59,7 @@ rm -rf mods/magic/
     sed -ri '/(bccache|PackageLoader)/d' mods/jinja2/__init__.py
     af '/^class/{s=0}/^class PackageLoader/{s=1}!s' mods/jinja2/loaders.py
     sed -ri 's/from url.*Request, urlopen.*/pass/' mods/copyparty/svchub.py
+    sed -ri 's/from urllib.* import urlopen.*/pass/' mods/copyparty/httpcli.py
     sed -ri 's/(.*"--vc-.*, help=).*/\1argparse.SUPPRESS)/' mods/copyparty/__main__.py
 }
 [ $w10 ] && {
@@ -66,6 +68,7 @@ rm -rf mods/magic/
         sed -ri 's/\binspect\b/os/' $spkgs/jinja2/$f.py
     done
 }
+af '/print\(lic/{s=0}!s;/lic = buf.deco/{s=1}' mods/copyparty/__main__.py
 
 sed -ri /fork_process/d mods/pyftpdlib/servers.py
 af '/^class _Base/{s=1}!s' mods/pyftpdlib/authorizers.py
@@ -99,9 +102,14 @@ excl=(
 )
 [ $w10 ] && excl+=(
     _pyrepl
+    bz2  # 51k
+    compression.zstd  # 195k
+    concurrent.interpreters  # 12k
     distutils
     setuptools
+    ftplib  # 23k
     PIL._avif
+    PIL._imagingft  # 861k (freetype)
     PIL.ImageQt
     PIL.ImageShow
     PIL.ImageTk

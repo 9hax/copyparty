@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import argparse
 import base64
@@ -14,8 +14,9 @@ try:
     if os.environ.get("PRTY_NO_ARGON2"):
         raise Exception()
 
-    HAVE_ARGON2 = True
     from argon2 import exceptions as argon2ex
+
+    HAVE_ARGON2 = True
 except:
     HAVE_ARGON2 = False
 

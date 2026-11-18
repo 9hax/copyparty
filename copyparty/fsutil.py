@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import argparse
 import json
@@ -10,12 +10,17 @@ import time
 from .__init__ import ANYWIN, FREEBSD, MACOS, UNIX
 from .authsrv import AXS, VFS, AuthSrv
 from .bos import bos
-from .util import chkcmd, json_hesc, min_ex, undot
+from .util import chkcmd, fsenc, json_hesc, min_ex, runcmd, undot
 
 if True:  # pylint: disable=using-constant-test
     from typing import Optional, Union
 
     from .util import RootLogger, undot
+
+
+PTN_FILEFRAG = re.compile(
+    r"^\s*[0-9]+:\s*[0-9]+\.\.\s*[0-9]+:\s*([0-9]+)\.\.\s*([0-9]+):\s*[0-9]+:\s*(.*)$"
+)
 
 
 class Fstab(object):
@@ -248,7 +253,7 @@ def ramdisk_chk(asrv: AuthSrv) -> None:
         t2 = ["\n  volume=[/%s], abspath=%r, type=%s, root=%r" % x for x in mods]
         log("vfs", t + "".join(t2) + "\n", 1)
 
-    assume = "mac" if MACOS else "lin"
+    assume = "mac" if MACOS else "win" if ANYWIN else "lin"
     for vol in asrv.vfs.all_nodes.values():
         if not vol.realpath or vol.flags.get("is_file"):
             continue
@@ -263,3 +268,18 @@ def ramdisk_chk(asrv: AuthSrv) -> None:
         htm = json.loads(vol.js_htm)
         vol.flags["fsnt"] = vol.js_ls["fsnt"] = htm["fsnt"] = fs
         vol.js_htm = json_hesc(json.dumps(htm))
+        # md_htm is dontcare; only relevant for up2k request body
+
+
+def filefrag(ap: str) -> list[str]:
+    rc, so, se = runcmd([b"filefrag", b"-v", fsenc(ap)], timeout=10)
+    ptn = PTN_FILEFRAG
+    ret = []
+    for ln in so.split("\n"):
+        m = ptn.match(ln)
+        if not m:
+            continue
+        a, b, s = m.groups()
+        if "shared" in s.strip().split(","):
+            ret.append((a, b))
+    return ret

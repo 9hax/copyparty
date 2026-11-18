@@ -316,8 +316,8 @@ function Modpoll() {
     };
 
     setTimeout(r.periodic, 300);
-    if (md_opt.modpoll_freq > 0)
-        setInterval(r.periodic, 1000 * md_opt.modpoll_freq);
+    if (modpoll_freq > 0)
+        setInterval(r.periodic, 1000 * modpoll_freq);
 
     return r;
 }
@@ -325,6 +325,9 @@ var modpoll = new Modpoll();
 
 
 window.onbeforeunload = function (e) {
+    if (window.gtfo)
+        return;
+
     if ((ebi("save").className + '').indexOf('disabled') >= 0)
         return; //nice (todo)
 

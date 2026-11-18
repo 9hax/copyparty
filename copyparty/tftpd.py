@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 try:
     from types import SimpleNamespace
@@ -275,7 +275,11 @@ class Tftpd(object):
         if not vfs.realpath:
             raise Exception("unmapped vfs")
 
-        return vfs, vpath, vfs.canonical(rem)
+        ap = vfs.canonical(rem)
+        if "bcasechk" in vfs.flags and not vfs.casechk(rem, True):
+            raise Exception("file not found")
+
+        return vfs, vpath, ap
 
     def _ls(self, vpath: str, raddress: str, rport: int, force=False) -> Any:
         # generate file listing if vpath is dir.txt and return as file object

@@ -780,8 +780,20 @@ function sfx_nice() {
 }
 
 
-function fsearch_explain(n) {
-    if (n)
+function bind_fsearch_explain() {
+    var o = QSA('.fsearch_explain');
+    for (var a = 0, aa = o.length; a < aa; a++)
+        o[a].onclick = fsearch_explain;
+}
+
+
+function fsearch_explain() {
+    var a = this.getAttribute('a');
+
+    if (a == "u")
+        return toast.inf(60, L.ue_ab);
+
+    if (a == "r")
         return toast.inf(60, L.ue_ro + (acct == '*' ? L.ue_nl : L.ue_la).format(acct));
 
     if (bcfg_get('fsearch', false))
@@ -801,7 +813,7 @@ function up2k_init(subtle) {
 
     setTimeout(function () {
         if (WebAssembly && !hws.length)
-            fetch(SR + '/.cpr/w/w.hash.js?_=' + TS);
+            fetch(SR + '/.cpr/w/deps/sha512.hw.js?_=' + TS);
     }, 1000);
 
     function showmodal(msg) {
@@ -842,6 +854,7 @@ function up2k_init(subtle) {
             var o = mknod('div', 'u2depmsg');
             o.innerHTML = nosubtle ? '' : m;
             ebi('u2foot').appendChild(o);
+            setmonclick();
         }
         loading_deps = true;
     }
@@ -858,12 +871,13 @@ function up2k_init(subtle) {
             ebi('u2err').className = '';
             ebi('u2err').innerHTML = '';
         }
-        if (msg == suggest_up2k) {
-            ebi('u2yea').onclick = function (e) {
-                ev(e);
-                goto('up2k');
-            };
-        }
+        setmonclick();
+    }
+
+    function setmonclick() {
+        var x;
+        x = ebi('u2yea'); if (x) x.onclick = go2up2k;
+        x = ebi('u2nah'); if (x) x.onclick = go2bup;
     }
 
     function un2k(msg) {
@@ -874,9 +888,8 @@ function up2k_init(subtle) {
     setmsg(suggest_up2k, 'msg');
 
     var u2szs = u2sz.split(','),
-        u2sz_min = parseInt(u2szs[0]),
-        u2sz_tgt = parseInt(u2szs[1]),
-        u2sz_max = parseInt(u2szs[2]);
+        u2sz_tgt = parseInt(u2szs[0]),
+        u2sz_max = parseInt(u2szs[1]);
 
     var parallel_uploads = ebi('nthread').value = icfg_get('nthread', u2j),
         stitch_tgt = ebi('u2szg').value = icfg_get('u2sz', u2sz_tgt),
@@ -966,6 +979,7 @@ function up2k_init(subtle) {
             "u": 0,
             "t": 0
         },
+        "xhr": [],
         "car": 0,
         "nre": 0,
         "slow_io": null,
@@ -982,6 +996,25 @@ function up2k_init(subtle) {
             arr.sort(function (a, b) {
                 return a.n < b.n ? -1 : 1;
             });
+    }
+
+    function unqueue_up(t) {
+        t.postlist = [];
+        var arr = st.todo.upload;
+        for (var a = arr.length - 1; a >= 0; a--)
+            if (arr[a].nfile == t.n)
+                arr.splice(a, 1);
+    }
+
+    function upq_has(q, t) {
+        for (var a = 0, aa = q.length; a < aa; a++)
+            if (q[a].nfile == t.n)
+                return true;
+    }
+
+    function unxhr(xhr) {
+        xhr.onload = xhr.onerror = xhr.ontimeout = null;
+        apop(st.xhr, xhr);
     }
 
     var pvis = new U2pvis("bz", '#u2cards', uc, st),
@@ -1055,25 +1088,28 @@ function up2k_init(subtle) {
         return onovercmn(this, e, true);
     }
     function onovercmn(self, e, btn) {
+        var ok = false;
         try {
-            var ok = false, dt = e.dataTransfer.types;
-            for (var a = 0; a < dt.length; a++)
+            var dt = e.dataTransfer.types;
+
+            for (var a = 0; a < dt.length && !ok; a++)
                 if (dt[a] == 'Files')
                     ok = true;
-                else if (dt[a] == 'text/uri-list') {
-                    if (btn) {
+
+            for (var a = 0; a < dt.length && !ok; a++)
+                if (dt[a] == 'text/uri-list') {
+                    if (btn)
                         ok = true;
-                        if (toast.txt == L.u_uri)
-                            toast.hide();
-                    }
                     else
                         return toast.inf(10, L.u_uri) || true;
                 }
 
-            if (!ok)
-                return true;
+            if (toast.txt == L.u_uri && ok)
+                toast.hide();
         }
         catch (ex) { }
+        if (!ok)
+            return true;
 
         ev(e);
         try {
@@ -1470,11 +1506,11 @@ function up2k_init(subtle) {
             }
 
             for (var a = 0; a < nw; a++)
-                hws.push(new Worker(SR + '/.cpr/w/w.hash.js?_=' + TS));
+                hws.push(new Worker(SR + '/.cpr/w/deps/sha512.hw.js?_=' + TS));
 
             if (!subtle)
                 for (var a = 0; a < hws.length; a++)
-                    hws[a].postMessage('nosubtle');
+                    hws[a].postMessage(['nosubtle']);
 
             console.log(hws.length + " hashers");
         }
@@ -1557,7 +1593,11 @@ function up2k_init(subtle) {
             if (!actx || actx.state != 'suspended' || toast.visible)
                 return;
 
-            toast.warn(30, "<div onclick=\"start_actx();toast.inf(3,'thanks!')\">" + L.u_actx + "</div>");
+            toast.warn(30, '<div id="actx_go">' + L.u_actx + '</div>');
+            ebi('actx_go').onclick = function () {
+                start_actx();
+                toast.inf(3, 'thanks!');
+            };
         }, 500);
     }
 
@@ -1877,6 +1917,30 @@ function up2k_init(subtle) {
                     else if (flag.ours) {
                         flag.give();
                     }
+                }
+
+                for (var a = st.xhr.length - 1; a >= 0; a--) {
+                    var xhr = st.xhr[a];
+                    if (!xhr.status || !xhr.responseText)
+                        continue;
+
+                    if (xhr.is_js)
+                        try {
+                            JSON.parse(xhr.responseText);
+                        }
+                        catch (ex) {
+                            continue;
+                        }
+
+                    xhr.tdeaf = xhr.tdeaf || now;
+                    if (!st.deaf && now - xhr.tdeaf < 3000)
+                        continue;
+
+                    if (!st.deaf)
+                        console.log('xhr: bad apple');
+
+                    st.deaf = true;
+                    xhr.onload();
                 }
 
                 if (st.bytes.inflight && (st.bytes.inflight < 0 || !st.busy.upload.length)) {
@@ -2294,7 +2358,7 @@ function up2k_init(subtle) {
             var w = hws[a];
             w.onmessage = onmsg;
             if (init)
-                w.postMessage('ping');
+                w.postMessage(['ping']);
             if (mem > 0)
                 free.push(w);
             mem -= chunksize;
@@ -2431,16 +2495,18 @@ function up2k_init(subtle) {
 
         st.busy.head.push(t);
 
-        var xhr = new XMLHttpRequest();
+        var xhr = new XHR();
         xhr.onerror = xhr.ontimeout = function () {
             console.log('head onerror, retrying', t.name, t);
             if (!toast.visible)
                 toast.warn(9.98, L.u_enethd + "\n\nfile: " + esc(t.name), t);
 
+            unxhr(xhr);
             apop(st.busy.head, t);
             st.todo.head.unshift(t);
         };
         function orz(e) {
+            unxhr(xhr);
             if (t.done)
                 return console.log('done; skip head2', t.name, t);
 
@@ -2479,6 +2545,7 @@ function up2k_init(subtle) {
         xhr.open('HEAD', t.purl + uricom_enc(t.name), true);
         xhr.timeout = 34000;
         xhr.send();
+        st.xhr.push(xhr);
     }
 
     /////
@@ -2491,6 +2558,7 @@ function up2k_init(subtle) {
             keepalive = t.keepalive,
             me = Date.now();
 
+        while (apop(st.todo.handshake, t));
         if (t.done)
             return console.log('done; skip hs', t.name, t);
 
@@ -2504,8 +2572,9 @@ function up2k_init(subtle) {
         if (!t.srch && !t.t_handshake)
             pvis.seth(t.n, 2, L.u_hs);
 
-        var xhr = new XMLHttpRequest();
+        var xhr = new XHR();
         xhr.onerror = xhr.ontimeout = function () {
+            unxhr(xhr);
             if (t.t_busied != me)  // t.done ok
                 return console.log('zombie handshake onerror', t.name, t);
 
@@ -2518,6 +2587,7 @@ function up2k_init(subtle) {
             t.keepalive = keepalive;
         };
         var orz = function (e) {
+            unxhr(xhr);
             if (t.t_busied != me || t.done)
                 return console.log('zombie handshake onload', t.name, t);
 
@@ -2548,8 +2618,9 @@ function up2k_init(subtle) {
 
                     if (!response || !response.hits || !response.hits.length) {
                         smsg = '404';
-                        msg = (L.u_s404 + ' <a href="#" onclick="fsearch_explain(' +
-                            (has(perms, 'write') ? '0' : '1') + ')" class="fsearch_explain">(' + L.u_expl + ')</a>');
+                        msg = (L.u_s404 + ' <a href="#" class="fsearch_explain" a="' +
+                            (has(perms, 'write') ? 'w' : 'r') + '">(' + L.u_expl + ')</a>');
+                        timer.add(bind_fsearch_explain);
                     }
                     else {
                         smsg = 'found';
@@ -2608,7 +2679,7 @@ function up2k_init(subtle) {
                     cbd.push(a == cdr_idx ? cdr_sz : chunksize);
                 }
 
-                t.postlist = [];
+                unqueue_up(t);
                 t.wark = response.wark;
                 var missing = response.hash;
                 for (var a = 0; a < missing.length; a++) {
@@ -2646,7 +2717,7 @@ function up2k_init(subtle) {
                             ccs += stp; stp *= 2;
                         }
                         ocs = Math.floor(ocs / 1024 / 1024);
-                        t.stitch_sz = Math.min(ocs, stitch_tgt);
+                        t.stitch_sz = Math.min(ocs, stitch_tgt || 1);
                     }
 
                     for (var a = 0; a < t.postlist.length; a++) {
@@ -2747,7 +2818,8 @@ function up2k_init(subtle) {
                         }
                     }
                     if (err_pend) {
-                        err += ' <a href="#" onclick="toast.inf(60, L.ue_ab);" class="fsearch_explain">(' + L.u_expl + ')</a>';
+                        err += ' <a href="#" class="fsearch_explain" a="u">(' + L.u_expl + ')</a>';
+                        timer.add(bind_fsearch_explain);
                     }
                 }
 
@@ -2801,9 +2873,11 @@ function up2k_init(subtle) {
 
         xhr.open('POST', t.purl, true);
         xhr.responseType = 'text';
+        xhr.is_js = true;
         xhr.timeout = 42000 + (t.srch || t.t_uploaded ? 0 :
             (t.size / (1048 * 20))); // safededup 20M/s hdd
         xhr.send(JSON.stringify(req));
+        st.xhr.push(xhr);
     }
 
     /////
@@ -2834,9 +2908,8 @@ function up2k_init(subtle) {
         if (upf.sprs)
             return true;
 
-        for (var a = 0, aa = st.busy.upload.length; a < aa; a++)
-            if (st.busy.upload[a].nfile == upt.nfile)
-                return false;
+        if (upq_has(st.busy.upload, upf))
+            return false;
 
         return true;
     }
@@ -2847,7 +2920,8 @@ function up2k_init(subtle) {
             nparts = upt.nparts,
             pcar = nparts[0],
             pcdr = nparts[nparts.length - 1],
-            maxsz = (u2sz_max > 1 ? u2sz_max : 2040) * 1024 * 1024;
+            maxmsz = stitch_tgt == u2sz_tgt ? u2sz_max : stitch_tgt,
+            maxsz = (maxmsz > 0 ? maxmsz : 2040) * 1024 * 1024;
 
         if (t.done)
             return console.log('done; skip chunk', t.name, t);
@@ -2892,12 +2966,12 @@ function up2k_init(subtle) {
                 pcar == pcdr ? pcar : ('' + pcar + '~' + pcdr);
 
         var orz = function (xhr) {
+            unxhr(xhr);
             st.bytes.inflight -= xhr.bsent;
             var txt = unpre((xhr.response && xhr.response.err) || xhr.responseText);
             if (txt.indexOf('upload blocked by x') + 1) {
                 apop(st.busy.upload, upt);
-                for (var a = pcar; a <= pcdr; a++)
-                    apop(t.postlist, a);
+                unqueue_up(t);
                 pvis.seth(t.n, 1, "ERROR");
                 pvis.seth(t.n, 2, txt.split(/\n/)[0]);
                 pvis.move(t.n, 'ng');
@@ -2920,8 +2994,13 @@ function up2k_init(subtle) {
                 st.etac.u++;
                 st.etac.t++;
             }
-            else if (txt.indexOf('already got that') + 1 ||
-                txt.indexOf('already being written') + 1) {
+            else if (xhr.status == 413) {
+                modal.die('bad server config; see "u2sz" in readme');
+            }
+            else if (txt.indexOf('already got that') + 1) {
+                unqueue_up(t);
+            }
+            else if (txt.indexOf('already being written') + 1) {
                 t.nojoin = t.nojoin || t.postlist.length;
                 console.log("ignoring dupe-segment with backoff", t.nojoin, t.name, t);
                 if (!toast.visible && st.todo.upload.length < 4)
@@ -2929,23 +3008,32 @@ function up2k_init(subtle) {
             }
             else {
                 xhrchk(xhr, L.u_cuerr2.format(snpart, Math.ceil(t.size / chunksize), esc(t.name)), "404, target folder not found (???)", "warn", t);
+                if (!t.sprs || txt.indexOf('unknown wark') == 0) {
+                    t.cooldown = t.coolmul = 0;
+                    unqueue_up(t);
+                }
                 chill(t);
             }
             orz2(xhr);
         }
         var orz2 = function (xhr) {
+            unxhr(xhr);
+            if (st.deaf)
+                xhr.abort();
             apop(st.busy.upload, upt);
             for (var a = pcar; a <= pcdr; a++)
                 apop(t.postlist, a);
-            if (!t.postlist.length) {
+            if (!t.postlist.length && !upq_has(st.busy.upload, t)) {
                 t.t_uploaded = Date.now();
-                pvis.seth(t.n, 1, 'verifying');
-                st.todo.handshake.unshift(t);
+                if (!has(st.busy.handshake, t)) {
+                    pvis.seth(t.n, 1, 'verifying');
+                    st.todo.handshake.unshift(t);
+                }
             }
             tasker();
         }
         function do_send() {
-            var xhr = new XMLHttpRequest(),
+            var xhr = new XHR(),
                 bfin = Math.floor(st.bytes.finished / 1024 / 1024),
                 btot = Math.floor(st.bytes.total / 1024 / 1024);
 
@@ -2958,8 +3046,13 @@ function up2k_init(subtle) {
 
                 st.bytes.inflight += db;
                 xhr.bsent = nb;
+
+                var n = 64;
+                if (nb == xhr.bsize)
+                    n = st.deaf ? 5 : 9;
                 if (!IE)
-                    xhr.timeout = 64000 + Date.now() - xhr.t0;
+                    xhr.timeout = n * 1000 + Date.now() - xhr.t0;
+
                 pvis.prog(t, pcar, nb);
             };
             xhr.onload = function (xev) {
@@ -2972,9 +3065,13 @@ function up2k_init(subtle) {
                 st.bytes.inflight -= (xhr.bsent || 0);
                 xhr.bsent = 0;
 
+                if (st.deaf)
+                    t.cooldown = t.coolmul = 0;
+
                 if (!toast.visible)
                     toast.warn(9.98, L.u_cuerr.format(snpart, Math.ceil(t.size / chunksize), esc(t.name)), t);
 
+                unqueue_up(t);  // maybe unknown wark (ff drops undrained rsp)
                 t.nojoin = t.nojoin || t.postlist.length;  // maybe rproxy postsize limit
                 console.log('chunkpit onerror,', t.name, t);
                 orz2(xhr);
@@ -3005,11 +3102,21 @@ function up2k_init(subtle) {
             if (xhr.overrideMimeType)
                 xhr.overrideMimeType('Content-Type', 'application/octet-stream');
 
+            if (st.deaf)
+                xhr.onreadystatechange = function (xev) {
+                    if (xhr.status == 200) {
+                        xhr.onreadystatechange = null;
+                        xhr.onload(xev);
+                    }
+                };
+
             xhr.bsent = 0;
+            xhr.bsize = cdr - car;
             xhr.t0 = Date.now();
             xhr.timeout = 1000 * (IE ? 1234 : 42);
             xhr.responseType = 'text';
             xhr.send(t.fobj.slice(car, cdr));
+            st.xhr.push(xhr);
         }
         do_send();
     }
@@ -3123,7 +3230,7 @@ function up2k_init(subtle) {
         var el = ebi('u2szg'), n = parseInt(el.value);
         stitch_tgt = n = (
             isNaN(n) ? u2sz_tgt :
-            n < u2sz_min ? u2sz_min :
+            n < 0 ? 0 :
             n > u2sz_max ? u2sz_max : n
         );
         if (n == u2sz_tgt) sdrop('u2sz'); else swrite('u2sz', n);
@@ -3317,7 +3424,7 @@ function up2k_init(subtle) {
                 flag = up2k_flagbus();
             }
             catch (ex) {
-                toast.err(5, "not supported on your browser:\n" + esc(basenames(ex)));
+                toast.err(5, L.b2old + ";\n" + esc(basenames(ex)));
                 bcfg_set('flag_en', uc.flag_en = false);
             }
         }
@@ -3360,7 +3467,7 @@ function up2k_init(subtle) {
     function set_nosubtle(v) {
         if (!WebAssembly)
             return toast.err(10, L.u_nowork);
-        modal.confirm(L.lang_set, location.reload.bind(location), null);
+        modal.confirm(L.lang_set, relod, null);
     }
 
     function set_upnag(en) {
@@ -3431,6 +3538,9 @@ function up2k_init(subtle) {
 
 
 function warn_uploader_busy(e) {
+    if (window.gtfo)
+        return;
+
     e.preventDefault();
     e.returnValue = '';
     return "upload in progress, click abort and use the file-tree to navigate instead";

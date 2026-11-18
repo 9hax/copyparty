@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import errno
 import os
@@ -31,9 +31,10 @@ class ThumbCli(object):
         self.asrv = hsrv.asrv
 
         # cache on both sides for less broker spam
-        self.cooldown = Cooldown(self.args.th_poke)
+        self.cooldown = Cooldown(self.args.th_poke) if self.args.th_poke else None
 
         self.thumbable = c["thumbable"]
+        self.thumbable_native = c["thumbable_native"]
         self.fmt_pil = c["pil"]
         self.fmt_vips = c["vips"]
         self.fmt_raw = c["raw"]
@@ -59,6 +60,10 @@ class ThumbCli(object):
         if is_vid and "dvthumb" in dbv.flags:
             return None
 
+        is_custom = ext not in self.thumbable_native
+        if is_custom and "dethumb" in dbv.flags:
+            return None
+
         want_opus = fmt in EXTS_AC
         is_au = ext in self.fmt_ffa
         is_vau = want_opus and ext in self.fmt_ffv
@@ -76,7 +81,7 @@ class ThumbCli(object):
         elif want_opus:
             return None
 
-        is_img = not is_vid and not is_au
+        is_img = not is_vid and not is_au and not is_custom
         if is_img and "dithumb" in dbv.flags:
             return None
 
@@ -97,7 +102,9 @@ class ThumbCli(object):
                 ):
                     sfmt = "j"
 
-            if sfmt == "x" and not self.can_jxl:
+            if sfmt == "x" and (
+                not self.can_jxl or (not H_PIL_JXL and ext in self.fmt_raw)
+            ):
                 sfmt = "w"
 
             vf_crop = dbv.flags["crop"]
@@ -149,14 +156,15 @@ class ThumbCli(object):
                 pass
 
         if ret:
-            tdir = os.path.dirname(tpath)
-            if self.cooldown.poke(tdir):
-                self.broker.say("thumbsrv.poke", tdir)
+            if self.cooldown:
+                tdir = os.path.dirname(tpath)
+                if self.cooldown.poke(tdir):
+                    self.broker.say("thumbsrv.poke", tdir)
 
-            if want_opus:
-                # audio files expire individually
-                if self.cooldown.poke(tpath):
-                    self.broker.say("thumbsrv.poke", tpath)
+                if want_opus:
+                    # audio files expire individually
+                    if self.cooldown.poke(tpath):
+                        self.broker.say("thumbsrv.poke", tpath)
 
             return ret
 

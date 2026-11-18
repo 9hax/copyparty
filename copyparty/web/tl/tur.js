@@ -39,6 +39,7 @@ Ls.tur = {
 			["ctrl-V", "buraya yapıştır (taşı/kopyala)"],
 			["Y", "seçileni indir"],
 			["F2", "seçileni yeniden adlandır"],
+			["F4", "yenile"], //m
 
 			"dosya yönetimi seçimleri",
 			["boşluk", "seçimi değiştir"],
@@ -572,9 +573,10 @@ Ls.tur = {
 	"u_https1": "daha iyi performans",
 	"u_https2": "için https'i",
 	"u_https3": "kullanın",
-	"u_ancient": 'tarayıcınız resmen fosilleşmiş -- belki de <a href="#" onclick="goto(\'bup\')">bup kullanmalısınız</a>',
+	"u_ancient": 'tarayıcınız resmen fosilleşmiş -- belki de <a href="#" id="u2nah">bup kullanmalısınız</a>',
 	"u_nowork": "firefox 53+ veya chrome 57+ veya iOS 11+ gerekiyor",
 	"tail_2old": "firefox 105+ veya chrome 71+ veya iOS 14.5+ gerekiyor",
+	"b2old": 'tarayıcınız çok eski', //m
 	"u_nodrop": 'tarayıcınız sürükleyip bırakmak için çok eski',
 	"u_notdir": "bu bir klasör değil!\n\ntarayıcınız çok eski,\nlütfen bunun yerine sürükleyip bırakmayı deneyin",
 	"u_uri": "başka tarayıcı pencerelerinden sürükle-bırak ile yükleme yapmak için,\nlütfen büyük yükleme düğmesinin üstüne bırakın",
@@ -658,6 +660,7 @@ Ls.tur = {
 	"rc_pla": "ses olarak oynat", //m
 	"rc_txt": "dosya görüntüleyicide aç", //m
 	"rc_md": "metin düzenleyicide aç", //m
+	"rc_wopi": "office düzenleyicide aç", //m
 	"rc_dl": "i̇ndir", //m
 	"rc_zip": "arşiv olarak indir", //m
 	"rc_cpl": "bağlantıyı kopyala", //m

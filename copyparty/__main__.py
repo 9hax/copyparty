@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 """copyparty: http file sharing hub (py2/py3)"""
 __author__ = "ed <copyparty@ocv.me>"
@@ -14,6 +14,7 @@ import locale
 import os
 import re
 import select
+import shutil
 import socket
 import sys
 import threading
@@ -23,11 +24,13 @@ import uuid
 
 from .__init__ import (
     ANYWIN,
+    CFG_DEF,
     CORES,
     EXE,
     MACOS,
     PY2,
     PY36,
+    UNIX,
     VT100,
     WINDOWS,
     E,
@@ -37,7 +40,10 @@ from .__init__ import (
 from .__version__ import CODENAME, S_BUILD_DT, S_VERSION
 from .authsrv import expand_config_file, split_cfg_ln, upgrade_cfg_fmt
 from .bos import bos
+from .cert import NO_TLS
 from .cfg import flagcats, onedash
+from .mdns import DNS_VND
+from .qrkode import VENDORED as QR_VND
 from .svchub import SvcHub
 from .util import (
     APPLESAN_TXT,
@@ -45,7 +51,10 @@ from .util import (
     DEF_EXP,
     DEF_MTE,
     DEF_MTH,
+    HAVE_BWRAP,
     HAVE_IPV6,
+    HAVE_MAGIC,
+    IFADDR_VND,
     IMPLICATIONS,
     JINJA_VER,
     MIKO_VER,
@@ -61,6 +70,7 @@ from .util import (
     URL_BUG,
     URL_PRJ,
     Daemon,
+    absreal,
     align_tab,
     b64enc,
     ctypes,
@@ -92,20 +102,19 @@ if PY2:
     range = xrange  # type: ignore
 
 try:
-    if os.environ.get("PRTY_NO_TLS"):
+    if NO_TLS:
         raise Exception()
 
-    HAVE_SSL = True
     import ssl
+
+    HAVE_SSL = True
 except:
     HAVE_SSL = False
 
 u = unicode
 zsid = uuid.uuid4().urn[4:]
 
-CFG_DEF = [os.environ.get("PRTY_CONFIG", "")]
-if not CFG_DEF[0]:
-    CFG_DEF.pop()
+FULL_HELP = os.environ.get("PRTY_FULL_HELP", "")
 
 
 class RiceFormatter(argparse.HelpFormatter):
@@ -582,6 +591,17 @@ def sfx_tpoke(top: str):
                 lprint("<TPOKE> [%s] %r" % (f, ex))
                 files.remove(f)
 
+        r = os.path.dirname(top)
+        for d in os.listdir(r):
+            try:
+                p = r + "/" + d
+                f = p + "/copyparty/up2k.py"
+                t2 = os.path.getmtime(f)
+                if t - t2 > 777777 and d.startswith("pe-copyparty"):
+                    shutil.rmtree(p)
+            except:
+                pass
+
         time.sleep(78123)
 
 
@@ -592,11 +612,63 @@ def showlic() -> None:
     except:
         buf = b""
 
-    if buf:
-        print(buf.decode("utf-8", "replace"))
-    else:
+    if not buf:
         print("no relevant license info to display")
         return
+
+    lic = buf.decode("utf-8", "replace")
+
+    try:
+        import site
+        from importlib import import_module
+        from inspect import getsourcefile
+
+        bases = site.PREFIXES + [site.USER_BASE]
+        bases = [x.replace(os.sep, "/") + "/" for x in list(set(bases)) if x]
+    except:
+        bases = []
+
+    # remove missing and/or non-vendored
+    for url, zi, zx in (
+        ("/dnslib/", 1, DNS_VND),
+        ("/ifaddr/", 1, IFADDR_VND),
+        ("/nayuki/QR", 1, QR_VND),
+        ("/partftpy", 2, PARTFTPY_VER),
+        ("/jinja/", 3, "jinja2"),
+        ("/markupsafe/", 3, "jinja2"),  # jinja2 sic
+        ("/pyftpdlib/", 2, PYFTPD_VER),  # heed PRTY_NO
+        ("/pyftpdlib/", 3, "pyftpdlib"),
+        ("/python-magic/", 1, HAVE_MAGIC),  # heed PRTY_NO
+        ("/python-magic/", 3, "magic"),
+    ):
+        if url not in lic:
+            continue
+        elif zi == 1:
+            if zx:
+                continue
+        elif zi == 2:
+            if zx != "(None)":
+                continue
+        elif zi == 3:
+            mod = None
+            try:
+                assert bases and getsourcefile and import_module  # type: ignore  # !rm
+                mod = import_module(zx)  # type: ignore
+                mp = getsourcefile(mod) or ""
+                for zs in bases:
+                    if mp.startswith(zs):
+                        mp = ""
+                if mp:
+                    continue
+            except:
+                if mod:
+                    continue
+        zs1, zs2 = lic.split(url, 1)
+        zs1 = zs1.rsplit("\n", 1)[0]
+        zs2 = zs2.split("\n\n", 1)[1]
+        lic = zs1 + "\n" + zs2
+
+    print(lic)
 
 
 def get_sects():
@@ -615,6 +687,7 @@ def get_sects():
             \033[32m-i 127.0.0.1\033[0m  listens on IPv4 localhost only
             \033[32m-i 127.1\033[0m      listens on IPv4 localhost only
             \033[32m-i 127.1,192.168.123.1\033[0m = IPv4 localhost and 192.168.123.1
+            \033[32m-i no\033[0m         disable webserver
 
             \033[33m-p\033[0m takes a comma-separated list of tcp ports to listen on;
             the default is \033[32m-p 3923\033[0m but as root you can \033[32m-p 80,443,3923\033[0m
@@ -774,6 +847,122 @@ def get_sects():
             """
             ).rstrip()
             + build_flags_desc(),
+        ],
+        [
+            "dedup",
+            "file deduplication on upload",
+            dedent(
+                """
+            when just \033[36m--dedup\033[0m or volflag "\033[36mdedup\033[0m" is enabled, files will be
+            deduplicated by means of \033[1msymlinks,\033[0m which demand some caution:
+
+            the available dedup approaches:
+
+              * symlinks work on most filesystems, but if another software
+                 moves either the symlink itself or the file that it points to,
+                 the link will break and the file "disappears";
+                 only safe if only copyparty is used to rename/move/delete
+
+              * hardlinks work on Linux filesystems and \033[1mlook\033[0m like regular files,
+                 except if the contents of one copy of that file is edited, then
+                 this will affect \033[1mall the dupes too!\033[0m
+                 and they share the same last-modified-time
+
+              * reflinks only work on btrfs/zfs/xfs but is the safest/best choice;
+                 deduplicated files behave just like regular files,
+                 and can be modified without affecting other copies/dupes
+
+            to change approach, add one of the following in addition to "\033[36mdedup\033[0m":
+
+            \033[36m--reflink\033[0m or volflag "\033[36mreflink\033[0m"
+            if reflink is not possible (unsupp/cross-fs), a full copy is made
+
+            \033[36m--hardlink-only\033[0m or volflag "\033[36mhardlinkonly\033[0m"
+            if hardlink is not possible (unsupp/cross-fs), a full copy is made
+
+            \033[36m--hardlink\033[0m or volflag "\033[36mhardlink\033[0m"
+            if hardlink is not possible (unsupp/cross-fs), a symlink is made
+
+            note: dedup works best when combined with e2ds or e2dsa
+
+            to deduplicate existing files on-disk, see \033[36m--help-redup\033[0m
+            """
+            ),
+        ],
+        [
+            "redup",
+            "deduplicating existing files on disk",
+            dedent(
+                """
+            \033[36m--redup\033[0m can convert on-disk files between deduplication-approaches,
+            for example turning redundant full copies into reflinks to save space
+
+            converts \033[1mall files\033[0m in each volume! not just copyparty-created ones
+
+            example: --redup \033[32mno,sym,hard\033[0m=\033[35mref\033[0m will find all files of type
+            \033[32mfullcopy/symlink/hardlink\033[0m, and convert them into \033[35mreflinks\033[0m
+            (see \033[36m--help-dedup\033[0m for a summary on the types)
+
+            converting \033[1mfrom\033[0m symlinks/hardlinks is fairly fast and simple;
+            in this case, the obvious target type/approach is reflinks
+            (which only works on btrfs/zfs/xfs)
+
+            converting \033[1mto\033[0m symlinks or hardlinks is \033[3mpossible\033[0m, but
+            not-recommended due to risks explained in \033[36m--help-dedup\033[0m
+            (interaction with other softwares can result in data loss)
+
+            converting \033[1mfrom\033[0m 'no' (full redundant copies) is hella slow;
+            checksums each file to avoid corruption from bad RAM
+            """
+            ),
+        ],
+        [
+            "thumb-ex",
+            "extract thumbnails from custom file formats with python scripts",
+            dedent(
+                """
+            copyparty is able to extract thumbnails from various media formats:
+            images, audio, video, ebooks
+
+            if you want to extract thumbnails from unsupported file formats,
+            you can load a plugin, which extracts image data from custom formats
+
+            load the plugin using --args; for example \033[36m
+             --tx-extract iso,mdf,dmg=~/party-thumb-extractors/th_diskimg.py
+            \033[0m
+            the file must define the function \033[35mmain(abspath, **kwargs)\033[0m:
+             \033[35mabspath\033[0m: path to the file to extract thumbnail from
+             \033[35mkwargs\033[0m currently have:
+             \033[35mvn\033[0m: the VFS which contains the requested file
+             \033[35mrth_srv\033[0m: the copyparty ThumbSrv instance
+
+            if `main` couldn't extract a thumbnail, it must return None;
+            otherwise the return value must be a tuple:
+             \033[35mreturn fmt, stream, offset, whence, size\033[0m
+
+            > \033[32mfmt\033[0m: thumbnail format, should be one of the formats
+                supported by copyparty; e.g. "png", "jpg"
+
+            > \033[32mstream\033[0m: binary file-like object containing the thumbnail,
+                supporting seek(), read(), and close() methods
+
+            > \033[32moffset, whence\033[0m: arguments to seek() method;
+                stream.seek(offset, whence) will be called once before copyparty
+                starts reading from the stream
+
+            > \033[32msize\033[0m: number of bytes to read ftom the stream;
+                if negative, copyparty will read through the end of the stream;
+
+            you can also supply extractors for standard formats to override default
+            thumbnail extraction behaviour; for example \033[36m
+             --tx-extract mp3=~/party-thumb-extractors/th_mp3.py
+            \033[0mwill let you extract or generate custom thumbnails for mp3 files
+
+            \033[1;35mPS!\033[0m the folder that contains the python file should ideally
+              not contain many other python files, and especially nothing
+              with filenames that overlap with modules used by copyparty
+            """
+            ),
         ],
         [
             "handlers",
@@ -1038,7 +1227,12 @@ def get_sects():
             .1   = when necessary, append a dot followed by a single digit
             .1!  = counter is always added, even when not necessary
             -3   = a hyphen followed by three-digit counter
-            (blank) = disable counter; overwrite existing logfile
+            no   = disable counter; append to existing file
+            del  = delete existing logfile and create new
+            over = overwrite existing logfile
+
+            append is not possible for .xz-compressed logfiles;
+            if logfile is *.xz and rlo is no then rlo will be .1
             """
             ),
         ],
@@ -1087,9 +1281,9 @@ def get_sects():
             "file/folder permissions",
             dedent(
                 """
-            global-option \033[33m--chmod-f\033[0m and volflag \033[33mchmod_f\033[0m specifies the unix-permission to use when creating a new file
+            global-option \033[33m--chmod-f\033[0m and volflag "\033[33mchmod_f\033[0m" specifies the unix-permission to use when creating a new file
 
-            similarly, \033[33m--chmod-d\033[0m and \033[33mchmod_d\033[0m sets the directory/folder perm
+            similarly, \033[33m--chmod-d\033[0m and "\033[33mchmod_d\033[0m" sets the directory/folder perm
 
             the value is a three- or four-digit octal number such as \033[32m755\033[0m, \033[32m0644\033[0m, \033[32m2750\033[0m, etc.
 
@@ -1234,8 +1428,10 @@ def add_general(ap, nc, srvname):
     ap2.add_argument("--mimes", action="store_true", help="list default mimetype mapping and exit")
     ap2.add_argument("--rmagic", action="store_true", help="do expensive analysis to improve accuracy of returned mimetypes; will make file-downloads, rss, and webdav slower (volflag=rmagic)")
     ap2.add_argument("-j", metavar="CORES", type=int, default=1, help="num cpu-cores for uploads/downloads (0=all); keeping the default is almost always best")
+    ap2.add_argument("--reload-sig", metavar="S", type=u, default=("" if ANYWIN else "USR1"), help="reload server config when unix-signal \033[33mS\033[0m is received; examples: [\033[32mSIGUSR1\033[0m], [\033[32mUSR1\033[0m], [\033[32m10\033[0m]")
     ap2.add_argument("--vc-url", metavar="URL", type=u, default="", help="URL to check for vulnerable versions (default-disabled)")
     ap2.add_argument("--vc-age", metavar="HOURS", type=int, default=3, help="how many hours to wait between vulnerability checks")
+    ap2.add_argument("--vc-sev", metavar="LEVEL", type=u, default="low", help="minimum severity to care about; one of these: \033[32mlow medium high critical\033[0m")
     ap2.add_argument("--vc-exit", action="store_true", help="panic and exit if current version is vulnerable")
     ap2.add_argument("--license", action="store_true", help="show licenses and exit")
     ap2.add_argument("--version", action="store_true", help="show versions and exit")
@@ -1254,8 +1450,8 @@ def add_qr(ap, tty):
     ap2.add_argument("--qrz", metavar="N", type=int, default=0, help="[\033[32m1\033[0m]=1x, [\033[32m2\033[0m]=2x, [\033[32m0\033[0m]=auto (try [\033[32m2\033[0m] on broken fonts)")
     ap2.add_argument("--qr-pin", metavar="N", type=int, default=0, help="sticky/pin the qr-code to always stay on-screen; [\033[32m0\033[0m]=disabled, [\033[32m1\033[0m]=with-url, [\033[32m2\033[0m]=just-qr")
     ap2.add_argument("--qr-wait", metavar="SEC", type=float, default=0, help="wait \033[33mSEC\033[0m before printing the qr-code to the log")
-    ap2.add_argument("--qr-every", metavar="SEC", type=float, default=0, help="print the qr-code every \033[33mSEC\033[0m (try this with/without --qr-pin in case of issues)")
-    ap2.add_argument("--qr-winch", metavar="SEC", type=float, default=0, help="when --qr-pin is enabled, check for terminal size change every \033[33mSEC\033[0m")
+    ap2.add_argument("--qr-every", metavar="SEC", type=float, default=0, help="print the qr-code every \033[33mSEC\033[0m (try this with/without \033[33m--qr-pin\033[0m in case of issues)")
+    ap2.add_argument("--qr-winch", metavar="SEC", type=float, default=0, help="when \033[33m--qr-pin\033[0m is enabled, check for terminal size change every \033[33mSEC\033[0m")
     ap2.add_argument("--qr-file", metavar="TXT", type=u, action="append", help="\033[34mREPEATABLE:\033[0m write qr-code to file.\n └─To create txt or svg, \033[33mTXT\033[0m is Filepath:Zoom:Pad, for example [\033[32mqr.txt:1:2\033[0m]\n └─To create png or gif, \033[33mTXT\033[0m is Filepath:Zoom:Pad:Foreground:Background, for example [\033[32mqr.png:8:2:333333:ffcc55\033[0m], or [\033[32mqr.png:8:2::ffcc55\033[0m] for transparent")
     ap2.add_argument("--qr-stdout", action="store_true", help="always display the QR-code on STDOUT in the terminal, even if \033[33m-q\033[0m")
     ap2.add_argument("--qr-stderr", action="store_true", help="always display the QR-code on STDERR in the terminal, even if \033[33m-q\033[0m")
@@ -1300,16 +1496,18 @@ def add_upload(ap):
     ap2.add_argument("--reg-cap", metavar="N", type=int, default=38400, help="max number of uploads to keep in memory when running without \033[33m-e2d\033[0m; roughly 1 MiB RAM per 600")
     ap2.add_argument("--no-fpool", action="store_true", help="disable file-handle pooling -- instead, repeatedly close and reopen files during upload (bad idea to enable this on windows and/or cow filesystems)")
     ap2.add_argument("--use-fpool", action="store_true", help="force file-handle pooling, even when it might be dangerous (multiprocessing, filesystems lacking sparse-files support, ...)")
-    ap2.add_argument("--chmod-f", metavar="UGO", type=u, default="", help="unix file permissions to use when creating files; default is probably 644 (OS-decided), see --help-chmod. Examples: [\033[32m644\033[0m] = owner-RW + all-R, [\033[32m755\033[0m] = owner-RWX + all-RX, [\033[32m777\033[0m] = full-yolo (volflag=chmod_f)")
-    ap2.add_argument("--chmod-d", metavar="UGO", type=u, default="755", help="unix file permissions to use when creating directories; see --help-chmod. Examples: [\033[32m755\033[0m] = owner-RW + all-R, [\033[32m2750\033[0m] = setgid + owner-RW + group-R, [\033[32m777\033[0m] = full-yolo (volflag=chmod_d)")
+    ap2.add_argument("--chmod-f", metavar="UGO", type=u, default="", help="unix file permissions to use when creating files; default is probably 644 (OS-decided), see \033[33m--help-chmod\033[0m. Examples: [\033[32m644\033[0m] = owner-RW + all-R, [\033[32m755\033[0m] = owner-RWX + all-RX, [\033[32m777\033[0m] = full-yolo (volflag=chmod_f)")
+    ap2.add_argument("--chmod-d", metavar="UGO", type=u, default="755", help="unix file permissions to use when creating directories; see \033[33m--help-chmod\033[0m. Examples: [\033[32m755\033[0m] = owner-RW + all-R, [\033[32m2750\033[0m] = setgid + owner-RW + group-R, [\033[32m777\033[0m] = full-yolo (volflag=chmod_d)")
     ap2.add_argument("--uid", metavar="N", type=int, default=-1, help="unix user-id to chown new files/folders to; default = -1 = do-not-change (volflag=uid)")
     ap2.add_argument("--gid", metavar="N", type=int, default=-1, help="unix group-id to chown new files/folders to; default = -1 = do-not-change (volflag=gid)")
     ap2.add_argument("--wram", action="store_true", help="allow uploading even if a volume is inside a ramdisk, meaning that all data will be lost on the next server reboot (volflag=wram)")
-    ap2.add_argument("--dedup", action="store_true", help="enable symlink-based upload deduplication (volflag=dedup)")
+    ap2.add_argument("--dedup", action="store_true", help="enable symlink-based upload deduplication; see \033[33m--help-dedup\033[0m (volflag=dedup)")
     ap2.add_argument("--safe-dedup", metavar="N", type=int, default=50, help="how careful to be when deduplicating files; [\033[32m1\033[0m] = just verify the filesize, [\033[32m50\033[0m] = verify file contents have not been altered (volflag=safededup)")
     ap2.add_argument("--hardlink", action="store_true", help="enable hardlink-based dedup; will fallback on symlinks when that is impossible (across filesystems) (volflag=hardlink)")
     ap2.add_argument("--hardlink-only", action="store_true", help="do not fallback to symlinks when a hardlink cannot be made (volflag=hardlinkonly)")
     ap2.add_argument("--reflink", action="store_true", help="enable reflink-based dedup; will fallback on full copies when that is impossible (non-CoW filesystem) (volflag=reflink)")
+    ap2.add_argument("--redup", metavar="A[,B]=T", help="convert dedup-type for existing files; \033[33mA,B\033[0m is dedup-types to convert from (no/ref/sym/hard), \033[33mT\033[0m is target type; converting from sym/hard is fast-ish, from no/ref is slooow, to sym/hard is jank; see \033[33m--help-redup\033[0m. Example: [\033[32msym,hard=ref\033[0m] (volflag=redup)")
+    ap2.add_argument("--redup-dry", action="store_true", help="dry-run; makes \033[33m--redup\033[0m not apply changes (volflag=redup_dry)")
     ap2.add_argument("--no-dupe", action="store_true", help="reject duplicate files during upload; only matches within the same volume (volflag=nodupe)")
     ap2.add_argument("--no-dupe-m", action="store_true", help="also reject dupes when moving a file into another volume (volflag=nodupem)")
     ap2.add_argument("--no-clone", action="store_true", help="do not use existing data on disk to satisfy dupe uploads; reduces server HDD reads in exchange for much more network load (volflag=noclone)")
@@ -1323,11 +1521,11 @@ def add_upload(ap):
     ap2.add_argument("--nrand", metavar="NUM", type=int, default=9, help="randomized filenames length (volflag=nrand)")
     ap2.add_argument("--magic", action="store_true", help="enable filetype detection on nameless uploads (volflag=magic)")
     ap2.add_argument("--df", metavar="GiB", type=u, default="0", help="ensure \033[33mGiB\033[0m free disk space by rejecting upload requests; assumes gigabytes unless a unit suffix is given: [\033[32m256m\033[0m], [\033[32m4\033[0m], [\033[32m2T\033[0m] (volflag=df)")
-    ap2.add_argument("--sparse", metavar="MiB", type=int, default=4, help="windows-only: minimum size of incoming uploads through up2k before they are made into sparse files")
+    ap2.add_argument("--sparse", metavar="MiB", type=int, default=1, help="windows-only: minimum size of incoming uploads through up2k before they are made into sparse files")
     ap2.add_argument("--turbo", metavar="LVL", type=int, default=0, help="configure turbo-mode in up2k client; [\033[32m-1\033[0m] = forbidden/always-off, [\033[32m0\033[0m] = default-off and warn if enabled, [\033[32m1\033[0m] = default-off, [\033[32m2\033[0m] = on, [\033[32m3\033[0m] = on and disable datecheck")
     ap2.add_argument("--nosubtle", metavar="N", type=int, default=0, help="when to use a wasm-hasher instead of the browser's builtin; faster on chrome, but buggy in older chrome versions. [\033[32m0\033[0m] = only when necessary (non-https), [\033[32m1\033[0m] = always (all browsers), [\033[32m2\033[0m] = always on chrome/firefox, [\033[32m3\033[0m] = always on chrome, [\033[32mN\033[0m] = chrome-version N and newer (recommendation: 137)")
     ap2.add_argument("--u2j", metavar="JOBS", type=int, default=2, help="web-client: number of file chunks to upload in parallel; 1 or 2 is good when latency is low (same-country), 2~4 for android-clients, 2~6 for cross-atlantic. Max is 6 in most browsers. Big values increase network-speed but may reduce HDD-speed")
-    ap2.add_argument("--u2sz", metavar="N,N,N", type=u, default="1,64,96", help="web-client: default upload chunksize (MiB); sets \033[33mmin,default,max\033[0m in the settings gui. Each HTTP POST will aim for \033[33mdefault\033[0m, and never exceed \033[33mmax\033[0m. Cloudflare max is 96. Big values are good for cross-atlantic but may increase HDD fragmentation on some FS. Disable this optimization with [\033[32m1,1,1\033[0m]")
+    ap2.add_argument("--u2sz", metavar="N,N", type=u, default="64,96", help="web-client: default upload chunksize in MiB, either \033[33mtarget,max\033[0m or just \033[33mtarget\033[0m (sets both); this is \033[33mtarget\033[0m in the web-UI. Each HTTP POST will aim for \033[33mtarget\033[0m and never exceed \033[33mmax\033[0m. Cloudflare max is 96. Minimum is [\033[32m1\033[0m] and will be slow. Lowest recommended is [\033[32m8\033[0m]. Big values are good for cross-atlantic but may increase HDD fragmentation on some FS. Disable this optimization with [\033[32mno\033[0m]")
     ap2.add_argument("--u2ow", metavar="NUM", type=int, default=0, help="web-client: default setting for when to replace/overwrite existing files; [\033[32m0\033[0m]=never, [\033[32m1\033[0m]=if-client-newer, [\033[32m2\033[0m]=always (volflag=u2ow)")
     ap2.add_argument("--u2sort", metavar="TXT", type=u, default="s", help="upload order; [\033[32ms\033[0m]=smallest-first, [\033[32mn\033[0m]=alphabetical, [\033[32mfs\033[0m]=force-s, [\033[32mfn\033[0m]=force-n -- alphabetical is a bit slower on fiber/LAN but makes it easier to eyeball if everything went fine")
     ap2.add_argument("--write-uplog", action="store_true", help="write POST reports to textfiles in working-directory")
@@ -1350,9 +1548,9 @@ def add_network(ap):
     ap2.add_argument("--cachectl", metavar="TXT", default="no-cache", help="default-value of the 'Cache-Control' response-header (controls caching in webbrowsers). Default prevents repeated downloading of the same file unless necessary (browser will ask copyparty if the file has changed). Examples: [\033[32mmax-age=604869\033[0m] will cache for 7 days, [\033[32mno-store, max-age=0\033[0m] will always redownload. (volflag=cachectl)")
     ap2.add_argument("--http-vary", metavar="TXT", type=u, default="Origin, PW, Cookie", help="value of the 'Vary' response-header; a hint for caching proxies")
     ap2.add_argument("--http-no-tcp", action="store_true", help="do not listen on TCP/IP for http/https; only listen on unix-domain-sockets")
-    if ANYWIN:
-        ap2.add_argument("--reuseaddr", action="store_true", help="set reuseaddr on listening sockets on windows; allows rapid restart of copyparty at the expense of being able to accidentally start multiple instances")
-    elif not MACOS:
+    if FULL_HELP or ANYWIN:
+        ap2.add_argument("--reuseaddr", action="store_true", help="set reuseaddr on listening sockets (windows-only); allows rapid restart of copyparty at the expense of being able to accidentally start multiple instances")
+    if FULL_HELP or (not ANYWIN and not MACOS):
         ap2.add_argument("--freebind", action="store_true", help="allow listening on IPs which do not yet exist, for example if the network interfaces haven't finished going up. Only makes sense for IPs other than '0.0.0.0', '127.0.0.1', '::', and '::1'. May require running as root (unless net.ipv6.ip_nonlocal_bind)")
     ap2.add_argument("--wr-h-eps", metavar="PATH", type=u, default="", help="write list of listening-on ip:port to textfile at \033[33mPATH\033[0m when http-servers have started")
     ap2.add_argument("--wr-h-aon", metavar="PATH", type=u, default="", help="write list of accessible-on ip:port to textfile at \033[33mPATH\033[0m when http-servers have started")
@@ -1403,7 +1601,7 @@ def add_auth(ap):
     ses_db = os.path.join(E.cfg, "sessions.db")
     ap2 = ap.add_argument_group("IdP / identity provider / user authentication options")
     ap2.add_argument("--idp-h-usr", metavar="HN", type=u, action="append", help="\033[34mREPEATABLE:\033[0m bypass the copyparty authentication checks if the request-header \033[33mHN\033[0m contains a username to associate the request with (for use with authentik/oauth/...)\n\033[1;31mWARNING:\033[0m if you enable this, make sure clients are unable to specify this header themselves; must be washed away and replaced by a reverse-proxy")
-    ap2.add_argument("--idp-hm-usr", metavar="T", type=u, action="append", help="\033[34mREPEATABLE:\033[0m bypass the copyparty authentication checks if the request-header \033[33mT\033[0m is provided, and its value exists in a mapping defined by this option; see --help-idp")
+    ap2.add_argument("--idp-hm-usr", metavar="T", type=u, action="append", help="\033[34mREPEATABLE:\033[0m bypass the copyparty authentication checks if the request-header \033[33mT\033[0m is provided, and its value exists in a mapping defined by this option; see \033[33m--help-idp\033[0m")
     ap2.add_argument("--idp-h-grp", metavar="HN", type=u, default="", help="assume the request-header \033[33mHN\033[0m contains the groupname of the requesting user; can be referenced in config files for group-based access control")
     ap2.add_argument("--idp-h-key", metavar="HN", type=u, default="", help="optional but recommended safeguard; your reverse-proxy will insert a secret header named \033[33mHN\033[0m into all requests, and the other IdP headers will be ignored if this header is not present")
     ap2.add_argument("--idp-gsep", metavar="RE", type=u, default="|:;+,", help="if there are multiple groups in \033[33m--idp-h-grp\033[0m, they are separated by one of the characters in \033[33mRE\033[0m")
@@ -1415,13 +1613,13 @@ def add_auth(ap):
     ap2.add_argument("--idp-login", metavar="L", type=u, default="", help="replace all login-buttons with a link to URL \033[33mL\033[0m (unless \033[32mpw\033[0m is in \033[33m--auth-ord\033[0m then both will be shown); [\033[32m{dst}\033[0m] expands to url of current page")
     ap2.add_argument("--idp-login-t", metavar="T", type=u, default="Login with SSO", help="the label/text for the idp-login button")
     ap2.add_argument("--idp-logout", metavar="L", type=u, default="", help="replace all logout-buttons with a link to URL \033[33mL\033[0m")
-    ap2.add_argument("--auth-ord", metavar="TXT", type=u, default="idp,ipu", help="controls auth precedence; examples: [\033[32mpw,idp,ipu\033[0m], [\033[32mipu,pw,idp\033[0m], see --help-auth-ord")
+    ap2.add_argument("--auth-ord", metavar="TXT", type=u, default="idp,ipu", help="controls auth precedence; examples: [\033[32mpw,idp,ipu\033[0m], [\033[32mipu,pw,idp\033[0m], see \033[33m--help-auth-ord\033[0m")
     ap2.add_argument("--pw-hdr", metavar="NAME", type=u, default="pw", help="lowercase name of password-header (NAME: foo); \033[1;31mWARNING:\033[0m Changing this will break support for many clients")
     ap2.add_argument("--pw-urlp", metavar="NAME", type=u, default="pw", help="lowercase name of password url-param (?NAME=foo); \033[1;31mWARNING:\033[0m Changing this will break support for many clients")
     ap2.add_argument("--no-bauth", action="store_true", help="disable basic-authentication support; do not accept passwords from the 'Authenticate' header at all. NOTE: This breaks support for the android app")
     ap2.add_argument("--bauth-last", action="store_true", help="keeps basic-authentication enabled, but only as a last-resort; if a cookie is also provided then the cookie wins")
     ap2.add_argument("--ses-db", metavar="PATH", type=u, default=ses_db, help="where to store the sessions database (if you run multiple copyparty instances, make sure they use different DBs)")
-    ap2.add_argument("--ses-len", metavar="CHARS", type=int, default=20, help="session key length; default is 120 bits ((20//4)*4*6)")
+    ap2.add_argument("--ses-len", metavar="CHARS", type=int, default=24, help="session key length; default is 144 bits ((24//4)*4*6)")
     ap2.add_argument("--no-ses", action="store_true", help="disable sessions; use plaintext passwords in cookies")
     ap2.add_argument("--grp-all", metavar="NAME", type=u, default="acct", help="the name of the auto-generated group which contains every username which is known")
     ap2.add_argument("--ipu", metavar="CIDR=USR", type=u, action="append", help="\033[34mREPEATABLE:\033[0m users with IP matching \033[33mCIDR\033[0m are auto-authenticated as username \033[33mUSR\033[0m; example: [\033[32m172.16.24.0/24=dave]")
@@ -1501,8 +1699,12 @@ def add_sftp(ap):
     ap2.add_argument("--sftp-pw", action="store_true", help="allow password-authentication with sftp (not just ssh-keys)")
     ap2.add_argument("--sftp-anon", metavar="TXT", type=u, default="", help="allow anonymous/unauthenticated connections with \033[33mTXT\033[0m as username")
     ap2.add_argument("--sftp-hostk", metavar="FP", type=u, default=E.cfg, help="path to folder with hostkeys, for example 'ssh_host_rsa_key'; missing keys will be generated")
+    ap2.add_argument("--sftp-fastldr", action="store_true", help="speedhack for 'loading hostkeys' on old CPUs; only use with known-good hostkeys")
+    ap2.add_argument("--sftp-chattr", metavar="T", default="s", help="which attributes can be modified with chattr? [\033[32ms\033[0m]=size, [\033[32mt\033[0m]=mtime, [\033[32mp\033[0m]=permissions, [\033[32mu\033[0m]=uid/gid. Example: [\033[32mstpu\033[0m]")
     ap2.add_argument("--sftp-banner", metavar="T", type=u, default="", help="bannertext to send when someone connects; can be @filepath")
     ap2.add_argument("--sftp-ipa", metavar="CIDR", type=u, default="", help="only accept connections from IP-addresses inside \033[33mCIDR\033[0m (comma-separated); specify [\033[32many\033[0m] to disable inheriting \033[33m--ipa\033[0m / \033[33m--ipar\033[0m. Examples: [\033[32mlan\033[0m] or [\033[32m10.89.0.0/16, 192.168.33.0/24\033[0m]")
+    ap2.add_argument("--sftp-hs-t", metavar="SEC", type=int, default=15, help="connection handshake timeout in seconds")
+    ap2.add_argument("--sftp-hs-n", metavar="NUM", type=int, default=4, help="max num ongoing/incomplete handshakes")
 
 
 def add_ftp(ap):
@@ -1517,6 +1719,7 @@ def add_ftp(ap):
     ap2.add_argument("--ftp-wt", metavar="SEC", type=int, default=7, help="grace period for resuming interrupted uploads (any client can write to any file last-modified more recently than \033[33mSEC\033[0m seconds ago)")
     ap2.add_argument("--ftp-nat", metavar="ADDR", type=u, default="", help="the NAT address to use for passive connections")
     ap2.add_argument("--ftp-pr", metavar="P-P", type=u, default="", help="the range of TCP ports to use for passive connections, for example \033[32m12000-13000")
+    ap2.add_argument("--ftp-banner", metavar="T", type=u, default="welcome to the party", help="bannertext to send when someone connects; \\n is newline, can be @filepath (loaded into memory on startup); if it has a newline then banner must be longer than 75 chars")
 
 
 def add_webdav(ap):
@@ -1568,6 +1771,19 @@ def add_opds(ap):
     ap2.add_argument("--opds-exts", metavar="T,T", type=u, default="epub,cbz,pdf", help="file formats to list in OPDS feeds; leave empty to show everything (volflag=opds_exts)")
 
 
+def add_wopi(ap):
+    ap2 = ap.add_argument_group("WOPI options")
+    ap2.add_argument("--wopi", action="store_true", help="enable integration with office suites using WOPI")
+    ap2.add_argument("--wopi-accs", metavar="TXT", type=u, default="", help="restrict wopi to this comma-separated list of usernames; default is everyone")
+    ap2.add_argument("--wopi-api", metavar="URL", type=u, default="", help="URL that the WOPI-client should use to communicate with copyparty; default is same as user's webbrowser. Example: [\033[32mhttps://party.example.com/\033[0m]")
+    ap2.add_argument("--wopi-url", metavar="URL", type=u, default="", help="URL to your WOPI client; the host of e.g. Collabora Online. Example: [\033[32mhttps://code.example.com/\033[0m]")
+    ap2.add_argument("--wopi-urls", metavar="H=U", type=u, action="append", help="\033[34mREPEATABLE:\033[0m maps http \033[33mH\033[0mOST copyparty being accessed by to specific WOPI client instance \033[33mU\033[0mRL; falls back to \033[33m--wopi-url\033[0m; examples: [\033[32mparty.public.com=https://office.public.com/\033[0m], [\033[32mparty.internal.net:8443=https://office.internal.net:8443/\033[0m]")
+    ap2.add_argument("--wopi-crt", metavar="TXT", type=u, default="", help="if \033[33m--wopi-url\033[0m is selfsigned: path to ca.pem or cert.pem to expect/verify (can be [\033[32mno\033[0m] for full-yolo)")
+    ap2.add_argument("--wopi-crt-icn", action="store_true", help="if \033[33m--wopi-url\033[0m is selfsigned: ignore the CN (server ip/name) in cert")
+    ap2.add_argument("--wopi-ttl", metavar="SEC", type=int, default=1800, help="session lifetime; allow editing for this many seconds (default is 30 min)")
+    ap2.add_argument("--wopi-wdel", action="store_true", help="require permissions read+write+delete for writing to file; default is just read+write")
+
+
 def add_handlers(ap):
     ap2 = ap.add_argument_group("handlers (see --help-handlers)")
     ap2.add_argument("--on404", metavar="PY", type=u, action="append", help="\033[34mREPEATABLE:\033[0m handle 404s by executing \033[33mPY\033[0m file")
@@ -1604,8 +1820,10 @@ def add_stats(ap):
 
 def add_yolo(ap):
     ap2 = ap.add_argument_group("yolo options")
+    ap2.add_argument("--hack-me-bro", action="store_true", help="allow enabling dangerously buggy protocols such as \033[33m--smb\033[0m / \033[33m--tftp\033[0m")
     ap2.add_argument("--allow-csrf", action="store_true", help="disable csrf protections; let other domains/sites impersonate you through cross-site requests; \033[1;31mDANGEROUS\033[0m / LAN-only")
     ap2.add_argument("--cookie-lax", action="store_true", help="allow cookies from other domains (if you follow a link from another website into your server, you will arrive logged-in); this reduces protection against CSRF")
+    ap2.add_argument("--allow-svg-js", action="store_true", help="allow svg images to execute javascript; default-disabled because ~nobody wants it (volflag=allow_svg_js)")
     ap2.add_argument("--no-fnugg", action="store_true", help="disable the smoketest for caching-related issues in the web-UI")
     ap2.add_argument("--getmod", action="store_true", help="permit ?move=[...] and ?delete as GET -- \033[1;31mDANGEROUS\033[0m, removes csrf protection")
     ap2.add_argument("--wo-up-readme", action="store_true", help="allow users with write-only access to upload logues and readmes without adding the _wo_ filename prefix (volflag=wo_up_readme)")
@@ -1641,21 +1859,47 @@ def add_optouts(ap):
 
 
 def add_safety(ap):
+    th_bwrap = ""
+    if HAVE_BWRAP:
+        zsl = [
+            HAVE_BWRAP,
+            "--proc /proc",
+            "--tmpfs /tmp",
+            "--tmpfs /var",
+            "--tmpfs /run",
+            "--dev-bind /dev/null /dev/null",
+            "--dev-bind /dev/random /dev/random",
+            "--dev-bind /dev/urandom /dev/urandom",
+            "--chdir /tmp",
+            "--clearenv",
+            "--unshare-all",
+            "--cap-drop ALL",
+            "--die-with-parent",
+            "--new-session",
+        ]
+        for d in ("/lib", "/lib64", "/usr/lib", "/usr/lib64"):
+            if os.path.isdir(d):
+                zsl.append(" --ro-bind %s %s" % (d, d))
+        th_bwrap = " ".join(zsl)
+
     ap2 = ap.add_argument_group("safety options")
     ap2.add_argument("-s", action="count", default=0, help="increase safety: Disable thumbnails / potentially dangerous software (ffmpeg/pillow/vips), hide partial uploads, avoid crawlers.\n └─Alias of\033[32m --dotpart --no-thumb --no-mtag-ff --no-robots --force-js")
     ap2.add_argument("-ss", action="store_true", help="further increase safety: Prevent js-injection, accidental move/delete, broken symlinks, webdav requires login, 404 on 403, ban on excessive 404s.\n └─Alias of\033[32m -s --no-html --no-readme --no-logues --unpost=0 --no-del --no-mv --reflink --dav-auth --vague-403 -nih")
     ap2.add_argument("-sss", action="store_true", help="further increase safety: Enable logging to disk, scan for dangerous symlinks.\n └─Alias of\033[32m -ss --no-dav --no-logues --no-readme -lo=cpp-%%Y-%%m%%d-%%H%%M%%S.txt.xz --ls=**,*,ln,p,r")
     ap2.add_argument("--ls", metavar="U[,V[,F]]", type=u, default="", help="do a sanity/safety check of all volumes on startup; arguments \033[33mUSER\033[0m,\033[33mVOL\033[0m,\033[33mFLAGS\033[0m (see \033[33m--help-ls\033[0m); example [\033[32m**,*,ln,p,r\033[0m]")
-    ap2.add_argument("--xvol", action="store_true", help="never follow symlinks leaving the volume root, unless the link is into another volume where the user has similar access (volflag=xvol)")
+    ap2.add_argument("--xvol", action="store_true", help="never follow symlinks leaving the volume root, unless the link is into another volume where the user also has access (keeps permissions from the outer/initial volume) (volflag=xvol)")
     ap2.add_argument("--xdev", action="store_true", help="stay within the filesystem of the volume root; do not descend into other devices (symlink or bind-mount to another HDD, ...) (volflag=xdev)")
     ap2.add_argument("--vol-nospawn", action="store_true", help="if a volume's folder does not exist on the HDD, then do not create it (continue with warning) (volflag=nospawn)")
     ap2.add_argument("--vol-or-crash", action="store_true", help="if a volume's folder does not exist on the HDD, then burst into flames (volflag=assert_root)")
     ap2.add_argument("--no-dot-mv", action="store_true", help="disallow moving dotfiles; makes it impossible to move folders containing dotfiles")
     ap2.add_argument("--no-dot-ren", action="store_true", help="disallow renaming dotfiles; makes it impossible to turn something into a dotfile")
-    ap2.add_argument("--no-logues", action="store_true", help="disable rendering .prologue/.epilogue.html into directory listings")
-    ap2.add_argument("--no-readme", action="store_true", help="disable rendering readme/preadme.md into directory listings")
-    ap2.add_argument("--no-script", action="store_true", help="disables javascript in html files; helps prevent XSS but kills interactive websites (volflag=noscript)")
-    ap2.add_argument("--no-html", action="store_true", help="show html-files as plain text; helps prevent XSS but kills websites/blogs, also enables --no-script (volflag=nohtml)")
+    ap2.add_argument("--no-logues", action="store_true", help="disable rendering .prologue/.epilogue.html into directory listings (volflag=no_logues)")
+    ap2.add_argument("--no-readme", action="store_true", help="disable rendering readme/preadme.md into directory listings (volflag=no_readme)")
+    ap2.add_argument("--csp-ui", metavar="TXT", default="script-src 'unsafe-eval' 'nonce-{{ js_nonce }}'; worker-src 'self'", help="content-security-policy to apply for the web-UI; default helps prevent XSS by blocking <script> / onclick / ... (volflag=csp_ui)")
+    ap2.add_argument("--csp-dl", metavar="TXT", default="", help="content-security-policy to apply for static files (volflag=csp_dl)")
+    ap2.add_argument("--no-script", action="store_true", help="disables javascript in html files; helps prevent XSS but kills interactive websites; this will override \033[33m--csp-dl\033[0m with [\033[32mscript-src 'none'\033[0m] (volflag=noscript)")
+    ap2.add_argument("--no-html", action="store_true", help="show html-files as plain text; helps prevent XSS but kills websites/blogs, also enables \033[33m--no-script\033[0m (volflag=nohtml)")
+    ap2.add_argument("--no-mime", action="store_true", help="disallow changing the response mimetype with url-parameter ?mime=... (volflag=nomime)")
     ap2.add_argument("--vague-403", action="store_true", help="send 404 instead of 403 (security through ambiguity, very enterprise). \033[1;31mWARNING:\033[0m Not compatible with WebDAV")
     ap2.add_argument("--force-js", action="store_true", help="don't send folder listings as HTML, force clients to use the embedded json instead -- slight protection against misbehaving search engines which ignore \033[33m--no-robots\033[0m")
     ap2.add_argument("--no-robots", action="store_true", help="adds http and html headers asking search engines to not index anything (volflag=norobots)")
@@ -1676,10 +1920,18 @@ def add_safety(ap):
     ap2.add_argument("--aclose", metavar="MIN", type=int, default=10, help="if a client maxes out the server connection limit, downgrade it from connection:keep-alive to connection:close for \033[33mMIN\033[0m minutes (and also kill its active connections) -- disable with 0")
     ap2.add_argument("--loris", metavar="B", type=int, default=60, help="if a client maxes out the server connection limit without sending headers, ban it for \033[33mB\033[0m minutes; disable with [\033[32m0\033[0m]")
     ap2.add_argument("--acao", metavar="V[,V]", type=u, default="*", help="Access-Control-Allow-Origin; list of origins (domains/IPs without port) to accept requests from; [\033[32mhttps://1.2.3.4\033[0m]. Default [\033[32m*\033[0m] allows requests from all sites but removes cookies and http-auth; only ?pw=hunter2 survives")
+    ap2.add_argument("--acao-re", metavar="PTN", type=u, default="", help="Access-Control-Allow-Origin; supplement to \033[33m--acao\033[0m; allow request if http-header 'Origin' matches either \033[33m--acao\033[0m or regex-\033[33mPTN\033[0m; ominous example: [\033[32m^moz-extension://.*\033[0m]")
     ap2.add_argument("--acam", metavar="V[,V]", type=u, default="GET,HEAD", help="Access-Control-Allow-Methods; list of methods to accept from offsite ('*' behaves like \033[33m--acao\033[0m's description)")
+    if FULL_HELP or ANYWIN:
+        ap2.add_argument("--unsafe-tools", action="store_true", help="windows-only: allow running programs (ffmpeg, dcraw_emu, ...) when their location is inside a folder that can be uploaded to (dangerous due to DLL-hijacking)")
+    if FULL_HELP or (not ANYWIN and not UNIX):
+        ap2.add_argument("--th-bwrap", metavar="CMD", type=u, default=th_bwrap, help="optional bwrap sandbox command for FFmpeg and dcraw (Linux-only)")
+        ap2.add_argument("--use-bwrap", metavar="TXT", type=u, default="n", help="a/n/f; [\033[32ma\033[0m]=auto (yes if the program 'bwrap' exists (assumes it works)), [\033[32mn\033[0m]=no (assumes bwrap is broken), [\033[32mf\033[0m]=force (disables FFmpeg if bwrap unavailable)")
+    else:
+        ap2.add_argument("--use-bwrap", metavar="TXT", type=u, default="n", help=argparse.SUPPRESS)
 
 
-def add_salt(ap, fk_salt, dk_salt, ah_salt):
+def add_salt(ap, fk_salt, dk_salt, ah_salt, wopi_salt):
     ap2 = ap.add_argument_group("salting options")
     ap2.add_argument("--ah-alg", metavar="ALG", type=u, default="none", help="account-pw hashing algorithm; one of these, best to worst: \033[32margon2 scrypt sha2 none\033[0m (each optionally followed by alg-specific comma-sep. config)")
     ap2.add_argument("--ah-salt", metavar="SALT", type=u, default=ah_salt, help="account-pw salt; ignored if \033[33m--ah-alg\033[0m is none (default)")
@@ -1688,6 +1940,7 @@ def add_salt(ap, fk_salt, dk_salt, ah_salt):
     ap2.add_argument("--fk-salt", metavar="SALT", type=u, default=fk_salt, help="per-file accesskey salt; used to generate unpredictable URLs for hidden files")
     ap2.add_argument("--dk-salt", metavar="SALT", type=u, default=dk_salt, help="per-directory accesskey salt; used to generate unpredictable URLs to share folders with users who only have the 'get' permission")
     ap2.add_argument("--warksalt", metavar="SALT", type=u, default="hunter2", help="up2k file-hash salt; serves no purpose, no reason to change this (but delete all databases if you do)")
+    ap2.add_argument("--wopi-salt", metavar="TXT", type=u, default=wopi_salt, help="WOPI file ID salt; used by \033[33m--wopi\033[0m for persistent file IDs")
     ap2.add_argument("--show-ah-salt", action="store_true", help="on startup, print the effective value of \033[33m--ah-salt\033[0m (the autogenerated value in $XDG_CONFIG_HOME unless otherwise specified)")
     ap2.add_argument("--show-fk-salt", action="store_true", help="on startup, print the effective value of \033[33m--fk-salt\033[0m (the autogenerated value in $XDG_CONFIG_HOME unless otherwise specified)")
     ap2.add_argument("--show-dk-salt", action="store_true", help="on startup, print the effective value of \033[33m--dk-salt\033[0m (the autogenerated value in $XDG_CONFIG_HOME unless otherwise specified)")
@@ -1705,7 +1958,8 @@ def add_logging(ap):
     ap2.add_argument("-q", action="store_true", help="quiet; disable most STDOUT messages")
     ap2.add_argument("-lo", metavar="PATH", type=u, default="", help="logfile; use .txt for plaintext or .xz for compressed. Example: \033[32mcpp-%%Y-%%m%%d-%%H%%M%%S.txt.xz\033[0m (NB: some errors may appear on STDOUT only)")
     ap2.add_argument("--flo", metavar="N", type=int, default=1, help="log format for \033[33m-lo\033[0m; [\033[32m1\033[0m]=classic/colors, [\033[32m2\033[0m]=no-color")
-    ap2.add_argument("--rlo", metavar="TXT", type=u, default=".1", help="logrotate counter format; see \033[33m--help-rlo\033[0m")
+    ap2.add_argument("--rlo", metavar="TXT", type=u, default="no", help="logrotate counter format; see \033[33m--help-rlo\033[0m")
+    ap2.add_argument("--logrot-sig", metavar="S", type=u, default="", help="immediately logrotate when unix-signal \033[33mS\033[0m is received; examples: [\033[32mSIGHUP\033[0m], [\033[32mHUP\033[0m], [\033[32m1\033[0m]")
     ap2.add_argument("--no-ansi", action="store_true", default=not VT100, help="disable colors; same as environment-variable NO_COLOR")
     ap2.add_argument("--ansi", action="store_true", help="force colors; overrides environment-variable NO_COLOR")
     ap2.add_argument("--no-logflush", action="store_true", help="don't flush the logfile after each write; tiny bit faster")
@@ -1755,33 +2009,44 @@ def add_thumbnail(ap):
     ap2.add_argument("--th-x3", metavar="TXT", type=u, default="n", help="show thumbs at 3x resolution; client can override in UI unless force. [\033[32my\033[0m]=yes, [\033[32mn\033[0m]=no, [\033[32mfy\033[0m]=force-yes, [\033[32mfn\033[0m]=force-no (volflag=th3x)")
     ap2.add_argument("--th-qv", metavar="N", type=int, default=40, help="webp/jpg thumbnail quality (10~90); higher is larger filesize and better quality (volflag=th_qv)")
     ap2.add_argument("--th-qvx", metavar="N", type=int, default=64, help="jxl thumbnail quality (10~90); higher is larger filesize and better quality (volflag=th_qvx)")
-    ap2.add_argument("--th-dec", metavar="LIBS", default="vips,raw,pil,ff", help="image decoders, in order of preference")
+    ap2.add_argument("--th-dec", metavar="LIBS", default="raw,pil,ff,vips", help="image decoders, in order of preference")
     ap2.add_argument("--th-no-jpg", action="store_true", help="disable jpg output")
     ap2.add_argument("--th-no-webp", action="store_true", help="disable webp output")
     ap2.add_argument("--th-no-jxl", action="store_true", help="disable jpeg-xl output")
     ap2.add_argument("--th-ff-jpg", action="store_true", help="force jpg output for video thumbs (avoids issues on some FFmpeg builds)")
     ap2.add_argument("--th-ff-swr", action="store_true", help="use swresample instead of soxr for audio thumbs (faster, lower accuracy, avoids issues on some FFmpeg builds)")
     ap2.add_argument("--th-vips-jxl", metavar="N", type=int, default=1, help="when to allow generating jxl thumbnails with libvips; 0=never, 1=musl-mallocng, 2=always")
-    ap2.add_argument("--th-poke", metavar="SEC", type=int, default=300, help="activity labeling cooldown -- avoids doing keepalive pokes (updating the mtime) on thumbnail folders more often than \033[33mSEC\033[0m seconds")
+    ap2.add_argument("--th-poke", metavar="SEC", type=int, default=300, help="activity labeling cooldown -- avoids doing keepalive pokes (updating the mtime) on thumbnail folders more often than \033[33mSEC\033[0m seconds; 0=no-keepalive")
     ap2.add_argument("--th-clean", metavar="SEC", type=int, default=43200, help="cleanup interval; 0=disabled")
     ap2.add_argument("--th-maxage", metavar="SEC", type=int, default=604800, help="max folder age -- folders which haven't been poked for longer than \033[33m--th-poke\033[0m seconds will get deleted every \033[33m--th-clean\033[0m seconds")
     ap2.add_argument("--th-pregen", metavar="F,F", type=u, default="", help="pregenerate thumbnails on startup; \033[33mF,F\033[0m is comma-separated list of formats; example: [\033[32mj,jf,w,w3,wf,wf3,x,xf\033[0m] NOTE: remember to set \033[33m--th-maxage 123456789\033[0m (volflag=th_pregen)")
     ap2.add_argument("--th-pre-rl", metavar="SEC", type=int, default=30, help="while pregen is running, ratelimit the thumbnailer logger to one message every \033[33mSEC\033[0m seconds (only works with \033[33m-j1\033[0m); set 0 to disable ratelimit")
-    ap2.add_argument("--th-covers", metavar="N,N", type=u, default="folder.png,folder.jpg,cover.png,cover.jpg", help="folder thumbnails to stat/look for; enabling \033[33m-e2d\033[0m will make these case-insensitive, and try them as dotfiles (.folder.jpg), and also automatically select thumbnails for all folders that contain pics, even if none match this pattern")
+    ap2.add_argument("--th-covers", metavar="N,N", type=u, default="folder.png,folder.jpg,cover.png,cover.jpg", help="folder thumbnails to stat/look for; enabling \033[33m-e2d\033[0m will make these case-insensitive, and try them as dotfiles (.folder.jpg), and also automatically select thumbnails for all folders that contain pics, even if none match this pattern (volflag=th_covers)")
     ap2.add_argument("--th-spec-p", metavar="N", type=u, default=1, help="for music, do spectrograms or embedded coverart? [\033[32m0\033[0m]=only-art, [\033[32m1\033[0m]=prefer-art, [\033[32m2\033[0m]=only-spec")
     ap2.add_argument("--th-spec-fl", action="store_true", help="generate spectrograms with logarithmic frequency scale instead of linear")
     # https://pillow.readthedocs.io/en/stable/handbook/image-file-formats.html
     # https://github.com/libvips/libvips
     # https://stackoverflow.com/a/47612661
     # ffmpeg -hide_banner -demuxers | awk '/^ D  /{print$2}' | while IFS= read -r x; do ffmpeg -hide_banner -h demuxer=$x; done | grep -E '^Demuxer |extensions:'
-    ap2.add_argument("--th-r-pil", metavar="T,T", type=u, default="avif,avifs,blp,bmp,cbz,dcx,dds,dib,emf,eps,epub,fits,flc,fli,fpx,gif,heic,heics,heif,heifs,icns,ico,im,j2p,j2k,jp2,jpeg,jpg,jpx,jxl,pbm,pcx,pgm,png,pnm,ppm,psd,qoi,sgi,spi,tga,tif,tiff,webp,wmf,xbm,xpm", help="image formats to decode using pillow")
-    ap2.add_argument("--th-r-vips", metavar="T,T", type=u, default="3fr,avif,cr2,cr3,crw,dcr,dng,erf,exr,fit,fits,fts,gif,hdr,heic,heics,heif,heifs,jp2,jpeg,jpg,jpx,jxl,k25,mdc,mef,mrw,nef,nii,pfm,pgm,png,ppm,raf,raw,sr2,srf,svg,tif,tiff,webp,x3f", help="image formats to decode using pyvips")
-    ap2.add_argument("--th-r-raw", metavar="T,T", type=u, default="3fr,arw,cr2,cr3,crw,dcr,dng,erf,k25,kdc,mdc,mef,mos,mrw,nef,nrw,orf,pef,raf,raw,sr2,srf,srw,x3f", help="image formats to decode using rawpy")
-    ap2.add_argument("--th-r-ffi", metavar="T,T", type=u, default="apng,avif,avifs,bmp,cbz,dds,dib,epub,fit,fits,fts,gif,hdr,heic,heics,heif,heifs,icns,ico,jp2,jpeg,jpg,jpx,jxl,pbm,pcx,pfm,pgm,png,pnm,ppm,psd,qoi,sgi,tga,tif,tiff,webp,xbm,xpm", help="image formats to decode using ffmpeg")
+    ap2.add_argument("--th-r-pil", metavar="T,T", type=u, default="avif,avifs,blp,bmp,cbz,dcx,dds,dib,emf,eps,epub,fits,flc,fli,fpx,gif,heic,heics,heif,heifs,icns,ico,im,j2p,j2k,jp2,jpeg,jpg,jpx,jxl,kra,ora,pbm,pcx,pgm,png,pnm,ppm,psd,qoi,sgi,spi,tga,tif,tiff,webp,wmf,xbm,xpm", help="image formats to decode using pillow")
+    ap2.add_argument("--th-r-vips", metavar="T,T", type=u, default="3fr,arw,avif,cr2,cr3,crw,dcr,dng,erf,exr,fit,fits,fts,gif,hdr,heic,heics,heif,heifs,jp2,jpeg,jpg,jpx,jxl,k25,kdc,mdc,mef,mrw,nef,nii,nrw,orf,pfm,pgm,png,ppm,raf,raw,rw2,sr2,srf,srw,svg,tif,tiff,webp,x3f", help="image formats to decode using pyvips")
+    ap2.add_argument("--th-r-raw", metavar="T,T", type=u, default="3fr,arw,cr2,cr3,crw,dcr,dng,erf,k25,kdc,mdc,mef,mos,mrw,nef,nrw,orf,pef,raf,raw,rw2,sr2,srf,srw,x3f", help="image formats to decode using rawpy (if available) or libraw's dcraw_emu")
+    ap2.add_argument("--th-r-ffi", metavar="T,T", type=u, default="apng,avif,avifs,bmp,cbz,dds,dib,epub,fit,fits,fts,gif,hdr,heic,heics,heif,heifs,icns,ico,jp2,jpeg,jpg,jpx,jxl,kra,ora,pbm,pcx,pfm,pgm,png,pnm,ppm,psd,qoi,sgi,tga,tif,tiff,webp,xbm,xpm", help="image formats to decode using ffmpeg")
     ap2.add_argument("--th-r-ffv", metavar="T,T", type=u, default="3gp,asf,av1,avc,avi,flv,h264,h265,hevc,m4v,mjpeg,mjpg,mkv,mov,mp4,mpeg,mpeg2,mpegts,mpg,mpg2,mts,nut,ogm,ogv,rm,ts,vob,webm,wmv", help="video formats to decode using ffmpeg")
-    ap2.add_argument("--th-r-ffa", metavar="T,T", type=u, default="aac,ac3,aif,aiff,alac,alaw,amr,apac,ape,au,bcstm,bfstm,brstm,bonk,dfpwm,dts,flac,gsm,ilbc,it,itgz,itxz,itz,m4a,m4b,m4r,mdgz,mdxz,mdz,mo3,mod,mp2,mp3,mpc,mptm,mt2,mulaw,oga,ogg,okt,opus,ra,s3m,s3gz,s3xz,s3z,tak,tta,ulaw,wav,wma,wv,xm,xmgz,xmxz,xmz,xpk", help="audio formats to decode using ffmpeg")
+    ap2.add_argument("--th-r-ffa", metavar="T,T", type=u, default="aac,ac3,aif,aiff,alac,alaw,amr,apac,ape,au,bcstm,bfstm,brstm,bonk,dfpwm,dts,flac,gsm,ilbc,it,itgz,itxz,itz,m4a,m4b,m4r,mdgz,mdxz,mdz,mka,mo3,mod,mp2,mp3,mpc,mptm,mt2,mulaw,oga,ogg,okt,opus,ra,s3m,s3gz,s3xz,s3z,tak,tta,ulaw,wav,wma,wv,xm,xmgz,xmxz,xmz,xpk", help="audio formats to decode using ffmpeg")
+
+    ap2.add_argument("--th-pil-add", metavar="T", type=u, default="", help="add or remove image formats to decode using pillow listed in \033[33m--th-r-pil\033[0m; example: [\033[32mfb2,pdf,-psd,-bmp\033[0m] (add fb2 and pdf, remove psd and bmp)")
+    ap2.add_argument("--th-vips-add", metavar="T", type=u, default="", help="add or remove formats; same as \033[33m--th-pil-add\033[0m but for pyvips")
+    ap2.add_argument("--th-raw-add", metavar="T", type=u, default="", help="add or remove formats; same as \033[33m--th-pil-add\033[0m but for rawpy/libraw")
+    ap2.add_argument("--th-ffi-add", metavar="T", type=u, default="", help="add or remove formats; same as \033[33m--th-pil-add\033[0m but for ffmpeg images")
+    ap2.add_argument("--th-ffv-add", metavar="T", type=u, default="", help="add or remove formats; same as \033[33m--th-pil-add\033[0m but for ffmpeg videos")
+    ap2.add_argument("--th-ffa-add", metavar="T", type=u, default="", help="add or remove formats; same as \033[33m--th-pil-add\033[0m but for ffmpeg audio")
+
     ap2.add_argument("--th-spec-cnv", metavar="T", type=u, default="it,itgz,itxz,itz,mdgz,mdxz,mdz,mo3,mod,s3m,s3gz,s3xz,s3z,xm,xmgz,xmxz,xmz,xpk", help="audio formats which provoke https://trac.ffmpeg.org/ticket/10797 (huge ram usage for s3xmodit spectrograms)")
-    ap2.add_argument("--au-unpk", metavar="E=F.C", type=u, default="mdz=mod.zip, mdgz=mod.gz, mdxz=mod.xz, s3z=s3m.zip, s3gz=s3m.gz, s3xz=s3m.xz, xmz=xm.zip, xmgz=xm.gz, xmxz=xm.xz, itz=it.zip, itgz=it.gz, itxz=it.xz, cbz=jpg.cbz, epub=jpg.epub", help="audio/image formats to decompress before passing to ffmpeg")
+    ap2.add_argument("--au-unpk", metavar="E=F.C", type=u, default="mdz=mod.zip, mdgz=mod.gz, mdxz=mod.xz, s3z=s3m.zip, s3gz=s3m.gz, s3xz=s3m.xz, xmz=xm.zip, xmgz=xm.gz, xmxz=xm.xz, itz=it.zip, itgz=it.gz, itxz=it.xz, cbz=jpg.cbz, epub=jpg.epub, kra=png.kra, ora=png.ora", help="audio/image formats to decompress before passing to ffmpeg")
+    ap2.add_argument("--th-extract", metavar="T", type=u, action="append", help="\033[34mREPEATABLE:\033[0m list of file extensions to thumbnail using a custom plugin (a python script); example: [\033[32mmdf,iso,dmg=/thumbs/diskimg.py\033[0m], see \033[33m--help-thumb-ex\033[0m")
+    ap2.add_argument("--th-extr-sz", metavar="M", type=int, default=16, help="max num megabytes to allow \033[33m--th-extract\033[0m plugins to extract from each file")
+    ap2.add_argument("--hot-th-extr", action="store_true", help="recompile extractors on each thumbnail extraction -- expensive but convenient when hacking on stuff")
 
 
 def add_transcoding(ap):
@@ -1838,11 +2103,13 @@ def add_db_general(ap, hcores):
     ap2.add_argument("--no-forget", action="store_true", help="never forget indexed files, even when deleted from disk -- makes it impossible to ever upload the same file twice -- only useful for offloading uploads to a cloud service or something (volflag=noforget)")
     ap2.add_argument("--forget-ip", metavar="MIN", type=int, default=0, help="remove uploader-IP from database (and make unpost impossible) \033[33mMIN\033[0m minutes after upload, for GDPR reasons. Default [\033[32m0\033[0m] is never-forget. [\033[32m1440\033[0m]=day, [\033[32m10080\033[0m]=week, [\033[32m43200\033[0m]=month. (volflag=forget_ip)")
     ap2.add_argument("--dbd", metavar="PROFILE", default="wal", help="database durability profile; sets the tradeoff between robustness and speed, see \033[33m--help-dbd\033[0m (volflag=dbd)")
+    ap2.add_argument("--hist-cow", action="store_true", help="btrfs-only: histpaths (db/thumbs) are nocow by default; if you really need Copy-on-write then enable this (volflag=hist_cow)")
     ap2.add_argument("--xlink", action="store_true", help="on upload: check all volumes for dupes, not just the target volume (probably buggy, not recommended) (volflag=xlink)")
     ap2.add_argument("--hash-mt", metavar="CORES", type=int, default=hcores, help="num cpu cores to use for file hashing; set 0 or 1 for single-core hashing")
     ap2.add_argument("--re-maxage", metavar="SEC", type=int, default=0, help="rescan filesystem for changes every \033[33mSEC\033[0m seconds; 0=off (volflag=scan)")
     ap2.add_argument("--db-act", metavar="SEC", type=float, default=10.0, help="defer any scheduled volume reindexing until \033[33mSEC\033[0m seconds after last db write (uploads, renames, ...)")
-    ap2.add_argument("--srch-icase", action="store_true", help="case-insensitive search for all unicode characters (the default is icase for just ascii). NOTE: will make searches much slower (around 4x), and NOTE: only applies to filenames/paths, not tags")
+    ap2.add_argument("--srch-icase", action="store_true", help="case-insensitive search for all unicode characters (the default is icase for just ascii). NOTE: will make searches much slower (around 3x), and NOTE: only applies to filenames/paths, not tags")
+    ap2.add_argument("--srch-nfkc", action="store_true", help="case-insensitive and unicode-normalization-insensitive search (NFC/NFD) for filenames/paths; slightly slower than \033[33m--srch-icase\033[0m (about 15%% slower / 87%% as fast)")
     ap2.add_argument("--srch-time", metavar="SEC", type=int, default=45, help="search deadline -- terminate searches running for more than \033[33mSEC\033[0m seconds")
     ap2.add_argument("--srch-hits", metavar="N", type=int, default=7999, help="max search results to allow clients to fetch; 125 results will be shown initially")
     ap2.add_argument("--srch-excl", metavar="PTN", type=u, default="", help="regex: exclude files from search results if the file-URL matches \033[33mPTN\033[0m (case-sensitive). Example: [\033[32mpassword|logs/[0-9]\033[0m] any URL containing 'password' or 'logs/DIGIT' (volflag=srch_excl)")
@@ -1872,7 +2139,9 @@ def add_txt(ap):
     ap2 = ap.add_argument_group("textfile options")
     ap2.add_argument("--rw-edit", metavar="T,T", type=u, default="md", help="comma-sep. list of file-extensions to allow editing with permissions read+write; all others require read+write+delete (volflag=rw_edit)")
     ap2.add_argument("--md-no-br", action="store_true", help="markdown: disable newline-is-newline; will only render a newline into the html given two trailing spaces or a double-newline (volflag=md_no_br)")
-    ap2.add_argument("--md-hist", metavar="TXT", type=u, default="s", help="where to store old version of markdown files; [\033[32ms\033[0m]=subfolder, [\033[32mv\033[0m]=volume-histpath, [\033[32mn\033[0m]=nope/disabled (volflag=md_hist)")
+    ap2.add_argument("--md-hist", metavar="TXT", type=u, default="s", help="where to store old version of textfiles; [\033[32ms\033[0m]=subfolder, [\033[32mv\033[0m]=volume-histpath, [\033[32mn\033[0m]=nope/disabled (volflag=md_hist)")
+    ap2.add_argument("--md-nhist", metavar="TXT", type=int, default=99, help="how many old versions of textfiles to keep; 0=infinite (volflag=md_nhist)")
+    ap2.add_argument("--show-hist", action="store_true", help="allow browsing the .hist folder; enable to view old markdown files (volflag=show_hist)")
     ap2.add_argument("--txt-eol", metavar="TYPE", type=u, default="", help="enable EOL conversion when writing documents; supported: CRLF, LF (volflag=txt_eol)")
     ap2.add_argument("-mcr", metavar="SEC", type=int, default=60, help="the textfile editor will check for serverside changes every \033[33mSEC\033[0m seconds")
     ap2.add_argument("-emp", action="store_true", help="enable markdown plugins -- neat but dangerous, big XSS risk")
@@ -1931,8 +2200,8 @@ def add_ui(ap, retry: int):
     ap2.add_argument("--css-browser", metavar="L", type=u, default="", help="URL to additional CSS to include in the filebrowser html")
     ap2.add_argument("--js-browser", metavar="L", type=u, default="", help="URL to additional JS to include in the filebrowser html")
     ap2.add_argument("--js-other", metavar="L", type=u, default="", help="URL to additional JS to include in all other pages")
-    ap2.add_argument("--html-head", metavar="TXT", type=u, default="", help="text to append to the <head> of all HTML pages (except for basic-browser); can be @PATH to send the contents of a file at PATH, and/or begin with %% to render as jinja2 template (volflag=html_head)")
-    ap2.add_argument("--html-head-s", metavar="T", type=u, default="", help="text to append to the <head> of all HTML pages (except for basic-browser); similar to (and can be combined with) --html-head but only accepts static text (volflag=html_head_s)")
+    ap2.add_argument("--html-head", metavar="TXT", type=u, default="", help="text to append to the <head> of all HTML pages (except for basic-browser); can be @PATH to send the contents of a file at PATH, and/or begin with %% to render as jinja2 template; \033[32m<script>\033[0m will not work, use \033[32m<script nonce=\"{{ js_nonce }}\">\033[0m (volflag=html_head)")
+    ap2.add_argument("--html-head-s", metavar="T", type=u, default="", help="text to append to the <head> of all HTML pages (except for basic-browser); similar to (and can be combined with) \033[33m--html-head\033[0m but only accepts static text (volflag=html_head_s)")
     ap2.add_argument("--ih", action="store_true", help="if a folder contains index.html, show that instead of the directory listing by default (can be changed in the client settings UI, or add ?v to URL for override)")
     ap2.add_argument("--textfiles", metavar="CSV", type=u, default="txt,nfo,diz,cue,readme", help="file extensions to present as plaintext")
     ap2.add_argument("--txt-max", metavar="KiB", type=int, default=64, help="max size of embedded textfiles on ?doc= (anything bigger will be lazy-loaded by JS)")
@@ -1943,7 +2212,7 @@ def add_ui(ap, retry: int):
     ap2.add_argument("--doctitle", metavar="TXT", type=u, default="copyparty @ --name", help="title / service-name to show in html documents")
     ap2.add_argument("--bname", metavar="TXT", type=u, default="--name", help="server name (displayed in filebrowser document title)")
     ap2.add_argument("--pb-url", metavar="URL", type=u, default=URL_PRJ, help="powered-by link; disable with \033[33m-nb\033[0m")
-    ap2.add_argument("--ver", action="store_true", help="show version on the control panel (incompatible with \033[33m-nb\033[0m). This is the same as --ver-who all")
+    ap2.add_argument("--ver", action="store_true", help="show version on the control panel (incompatible with \033[33m-nb\033[0m). This is the same as \033[33m--ver-who all\033[0m")
     ap2.add_argument("--ver-who", metavar="TXT", type=u, default="no", help="only show version for: [\033[32ma\033[0m]=admin-permission-anywhere, [\033[32mauth\033[0m]=authenticated, [\033[32mall\033[0m]=anyone")
     ap2.add_argument("--du-who", metavar="TXT", type=u, default="all", help="only show disk usage for: [\033[32mno\033[0m]=nobody, [\033[32ma\033[0m]=admin-permission, [\033[32mrw\033[0m]=read-write, [\033[32mw\033[0m]=write, [\033[32mauth\033[0m]=authenticated, [\033[32mall\033[0m]=anyone (volflag=du_who)")
     ap2.add_argument("--ver-iwho", type=int, default=0, help=argparse.SUPPRESS)
@@ -1974,16 +2243,21 @@ def add_debug(ap):
     ap2.add_argument("--vc", action="store_true", help="verbose config file parser (explain config)")
     ap2.add_argument("--cgen", action="store_true", help="generate config file from current config (best-effort; probably buggy)")
     ap2.add_argument("--deps", action="store_true", help="list information about detected optional dependencies")
-    if hasattr(select, "poll"):
+    if FULL_HELP or hasattr(select, "poll"):
         ap2.add_argument("--no-poll", action="store_true", help="kernel-bug workaround: disable poll; use select instead (limits max num clients to ~700)")
     ap2.add_argument("--no-sendfile", action="store_true", help="kernel-bug workaround: disable sendfile; do a safe and slow read-send-loop instead")
     ap2.add_argument("--no-scandir", action="store_true", help="kernel-bug workaround: disable scandir; do a listdir + stat on each file instead")
     ap2.add_argument("--no-fastboot", action="store_true", help="wait for initial filesystem indexing before accepting client requests")
     ap2.add_argument("--no-htp", action="store_true", help="disable httpserver threadpool, create threads as-needed instead")
+    if sys.version_info > (3, 7) and not ANYWIN:
+        ap2.add_argument("--sig-thr", action="store_true", help="start separate thread for OS-signals (try this if CTRL-C is busted)")
+    else:
+        ap2.add_argument("--sig-thr", action="store_true", default=True, help=argparse.SUPPRESS)
     ap2.add_argument("--rm-sck", action="store_true", help="when listening on unix-sockets, do a basic delete+bind instead of the default atomic bind")
     ap2.add_argument("--srch-dbg", action="store_true", help="explain search processing, and do some extra expensive sanity checks")
     ap2.add_argument("--rclone-mdns", action="store_true", help="use mdns-domain instead of server-ip on /?hc")
     ap2.add_argument("--stackmon", metavar="P,S", type=u, default="", help="write stacktrace to \033[33mP\033[0math every \033[33mS\033[0m second, for example --stackmon=\033[32m./st/%%Y-%%m/%%d/%%H%%M.xz,60")
+    ap2.add_argument("--stack-sig", metavar="S", type=u, default="", help="show stacktrace when unix-signal \033[33mS\033[0m is received; examples: [\033[32mSIGUSR2\033[0m], [\033[32mUSR2\033[0m], [\033[32m12\033[0m]")
     ap2.add_argument("--log-thrs", metavar="SEC", type=float, default=0.0, help="list active threads every \033[33mSEC\033[0m")
     ap2.add_argument("--log-fk", metavar="REGEX", type=u, default="", help="log filekey params for files where path matches \033[33mREGEX\033[0m; [\033[32m.\033[0m] (a single dot) = all files")
     ap2.add_argument("--bak-flips", action="store_true", help="[up2k] if a client uploads a bitflipped/corrupted chunk, store a copy according to \033[33m--bf-nc\033[0m and \033[33m--bf-dir\033[0m")
@@ -2011,6 +2285,7 @@ def run_argparse(
     fk_salt = get_salt("fk", 18)
     dk_salt = get_salt("dk", 30)
     ah_salt = get_salt("ah", 18)
+    wopi_salt = get_salt("wopi", 18)
 
     # alpine peaks at 5 threads for some reason,
     # all others scale past that (but try to avoid SMT),
@@ -2045,8 +2320,9 @@ def run_argparse(
     add_tftp(ap)
     add_smb(ap)
     add_opds(ap)
+    add_wopi(ap)
     add_safety(ap)
-    add_salt(ap, fk_salt, dk_salt, ah_salt)
+    add_salt(ap, fk_salt, dk_salt, ah_salt, wopi_salt)
     add_optouts(ap)
     add_shutdown(ap)
     add_yolo(ap)
@@ -2148,6 +2424,9 @@ def main(argv: Optional[list[str]] = None) -> None:
             Daemon(sfx_tpoke, "sfx-tpoke", (zs.split("=", 1)[1],))
             argv.pop(n)
             break
+
+    if CFG_DEF:
+        CFG_DEF[0] = absreal(CFG_DEF[0])
 
     ensure_locale()
 
@@ -2303,7 +2582,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         if al.ciphers:
             configure_ssl_ciphers(al)
     else:
-        warn("ssl module does not exist; cannot enable https")
+        if not al.http_only and not NO_TLS:
+            warn("ssl module does not exist; cannot enable https")
         al.http_only = True
 
     if PY2 and WINDOWS and al.e2d:

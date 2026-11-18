@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import errno
 import os
@@ -51,7 +51,6 @@ except ImportError:
         SRV,
         TXT,
         A,
-        Bimap,
         DNSHeader,
         DNSQuestion,
         DNSRecord,

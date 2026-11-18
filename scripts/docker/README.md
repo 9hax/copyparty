@@ -49,14 +49,19 @@ with image size after installation and when gzipped
 * [`min`](https://hub.docker.com/r/copyparty/min) (57 MiB, 20 gz) is just copyparty itself
 * [`im`](https://hub.docker.com/r/copyparty/im) (70 MiB, 25 gz) can thumbnail images with pillow, parse media files with mutagen
 * [`ac` (163 MiB, 56 gz)](https://hub.docker.com/r/copyparty/ac) is `im` plus ffmpeg for video/audio thumbs + audio transcoding + better tags
-* [`iv`](https://hub.docker.com/r/copyparty/iv) (211 MiB, 73 gz) is `ac` plus vips for faster heif / avic / jxl thumbnails
+* [`iv`](https://hub.docker.com/r/copyparty/iv) (211 MiB, 73 gz) is `ac` plus vips for more thumbnail formats
 * [`dj`](https://hub.docker.com/r/copyparty/dj) (309 MiB, 104 gz) is `iv` plus beatroot/keyfinder to detect musical keys and bpm
 
 [`ac` is recommended](https://hub.docker.com/r/copyparty/ac) since the additional features available in `iv` and `dj` are rarely useful
 
-most editions support `x86`, `x86_64`, `armhf`, `aarch64`, `ppc64le`, `s390x`
-* `dj` doesn't run on `ppc64le`, `s390x`, `armhf`
-* `iv` doesn't run on `ppc64le`, `s390x`
+| this architecture              | can run these editions        |
+| ------------------------------ | ----------------------------- |
+| `x86` aka `i386` aka `386`     | `min`, `im`, `ac`, `iv`, `dj` |
+| `x86_64` aka `x64` aka `amd64` | `min`, `im`, `ac`, `iv`, `dj` |
+| `AArch64` aka `arm64/v8`       | `min`, `im`, `ac`, `iv`, `dj` |
+| `arm32` aka `arm/v7`           | `min`, `im`, `ac`             |
+| `ppc64le` aka `PowerPC`        | `min`, `im`, `ac`             |
+| `s390x` aka `IBM mainframe`    | `min`, `im`, `ac`             |
 
 > NOTE: the following editions are unfinished experiments, and not published anywhere: djd djf djff dju
 

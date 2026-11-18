@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
-S_VERSION = "2.20"
-S_BUILD_DT = "2026-04-22"
+S_VERSION = "2.25"
+S_BUILD_DT = "2026-10-05"
 
 """
 u2c.py: upload to copyparty
@@ -66,6 +66,8 @@ else:
 
 
 WTF8 = "replace" if PY2 else "surrogateescape"
+
+SEP = "{0}".format(os.sep).encode("ascii")
 
 VT100 = platform.system() != "Windows"
 
@@ -249,7 +251,7 @@ class File(object):
 
     def __init__(self, top, rel, size, lmod):
         self.top = top  # type: bytes
-        self.rel = rel.replace(b"\\", b"/")  # type: bytes
+        self.rel = rel.replace(SEP, b"/")  # type: bytes
         self.size = size  # type: int
         self.lmod = lmod  # type: float
 
@@ -267,6 +269,7 @@ class File(object):
         self.wark = ""  # type: str
         self.url = ""  # type: str
         self.nhs = 0  # type: int
+        self.t_hs = 0.0  # type: float
 
         # set by upload
         self.t0_up = 0.0  # type: float
@@ -398,7 +401,7 @@ class MTHash(object):
             self.csz = chunksz
 
             chunks = {}
-            nchunks = int(math.ceil(fsz / chunksz))
+            nchunks = -int(-fsz // chunksz)
             for nch in range(nchunks):
                 self.work_q.put(nch)
 
@@ -652,7 +655,7 @@ def walkdir(err, top, excl, seen):
 
 def walkdirs(err, tops, excl):
     """recursive statdir for a list of tops, yields [top, relpath, stat]"""
-    sep = "{0}".format(os.sep).encode("ascii")
+    sep = SEP
     if not VT100:
         excl = excl.replace("/", r"\\")
         za = []
@@ -725,7 +728,7 @@ def up2k_chunksize(filesize):
     stepsize = 512 * 1024
     while True:
         for mul in [1, 2]:
-            nchunks = math.ceil(filesize * 1.0 / chunksize)
+            nchunks = -int(-filesize // chunksize)
             if nchunks <= 256 or (chunksize >= 32 * 1024 * 1024 and nchunks <= 4096):
                 return chunksize
 
@@ -733,16 +736,22 @@ def up2k_chunksize(filesize):
             stepsize *= mul
 
 
-# mostly from copyparty/up2k.py
 def get_hashlist(file, pcb, mth):
     # type: (File, Any, Any) -> None
+    with open(file.abs, "rb", 512 * 1024) as f:
+        get_hashlist_f(file, pcb, mth, f)
+
+
+# mostly from copyparty/up2k.py
+def get_hashlist_f(file, pcb, mth, f):
+    # type: (File, Any, Any, Any) -> None
     """generates the up2k hashlist from file contents, inserts it into `file`"""
 
     chunk_sz = up2k_chunksize(file.size)
     file_rem = file.size
     file_ofs = 0
     ret = []
-    with open(file.abs, "rb", 512 * 1024) as f:
+    if True:
         t0 = time.time()
 
         if mth and file.size >= 1024 * 512:
@@ -776,6 +785,18 @@ def get_hashlist(file, pcb, mth):
     for k, v1, v2 in ret:
         if k not in file.kchunks:
             file.kchunks[k] = [v1, v2]
+
+
+def wark_stdin(ar):
+    file = File(b"", b"", int(ar.files[0]), 0)
+    get_hashlist_f(file, None, False, sys.stdin if PY2 else sys.stdin.buffer)
+    if ar.chs:
+        zsl = ["%s %d %d" % (zsii[0], n, zsii[1]) for n, zsii in enumerate(file.cids)]
+        print("chs:\n" + "\n".join(zsl))
+    zsl = [ar.wsalt, str(file.size)] + [x[0] for x in file.cids]
+    zb = hashlib.sha512("\n".join(zsl).encode("utf-8")).digest()[:33]
+    wark = ub64enc(zb).decode("utf-8")
+    print(wark)
 
 
 def printlink(ar, purl, name, fk):
@@ -886,6 +907,7 @@ def handshake(ar, file, search):
     file.url = quotep(r["purl"].encode("utf-8", WTF8)).decode("utf-8")
     file.name = r["name"]
     file.wark = r["wark"]
+    file.t_hs = time.time()
 
     if ar.uon and not r["hash"]:
         printlink(ar, file.url, r["name"], r.get("fk"))
@@ -1009,7 +1031,7 @@ class Ctl(object):
             self.up_b = 0  # num bytes handled
             self.up_br = 0  # num bytes actually transferred
             self.uploader_busy = 0
-            self.serialized = False
+            self.oneconn = False
 
             self.t0 = time.time()
             self.t0_up = None
@@ -1195,14 +1217,15 @@ class Ctl(object):
 
     def hasher(self):
         ptn = re.compile(self.ar.x.encode("utf-8"), re.I) if self.ar.x else None
-        sep = "{0}".format(os.sep).encode("ascii")
+        usep = os.sep
+        sep = SEP
         prd = None
         ls = {}
         for top, rel, inf in self.filegen:
             isdir = stat.S_ISDIR(inf.st_mode)
             if self.ar.z or self.ar.drd:
                 rd = rel if isdir else os.path.dirname(rel)
-                srd = rd.decode("utf-8", "replace").replace("\\", "/").rstrip("/")
+                srd = rd.decode("utf-8", "replace").replace(usep, "/").rstrip("/")
                 if srd:
                     srd += "/"
                 if prd != rd:
@@ -1212,7 +1235,7 @@ class Ctl(object):
                         print("      ls ~{0}".format(srd))
                         zt = (
                             self.ar.vtop,
-                            quotep(rd.replace(b"\\", b"/")).decode("utf-8"),
+                            quotep(rd.replace(sep, b"/")).decode("utf-8"),
                         )
                         sc, txt = web.req("GET", "%s%s?ls&lt&dots" % zt, {})
                         if sc >= 400:
@@ -1311,7 +1334,8 @@ class Ctl(object):
                 if self.ar.jw:
                     print("%s  %s" % (wark, vp))
                 else:
-                    zd = datetime.datetime.fromtimestamp(max(0, file.lmod), UTC)
+                    tsdt = datetime.datetime.fromtimestamp
+                    zd = tsdt(max(0, min(2 << 36, file.lmod)), UTC)
                     dt = "%04d-%02d-%02d %02d:%02d:%02d" % (
                         zd.year,
                         zd.month,
@@ -1384,10 +1408,10 @@ class Ctl(object):
                 self.recheck.append(file)
 
             with self.mutex:
-                if hs and not sprs and not self.serialized:
-                    t = "server filesystem does not support sparse files; serializing uploads\n"
+                if hs and not sprs and not self.oneconn:
+                    t = "server filesystem does not support sparse files; cannot parallelize uploads\n"
                     eprint(t)
-                    self.serialized = True
+                    self.oneconn = True
                     for _ in range(self.ar.j - 1):
                         self.q_upload.put(None)
                 if not hs:
@@ -1399,7 +1423,7 @@ class Ctl(object):
                     if not file.recheck:
                         self.up_done(file)
 
-                if hs and file.up_c:
+                if hs and file.up_c and not self.oneconn:
                     # some chunks failed
                     self.up_c -= len(hs)
                     file.up_c -= len(hs)
@@ -1457,6 +1481,7 @@ class Ctl(object):
                 self.q_upload.put(fsl)
 
     def uploader(self):
+        drop_hs = (0.0, "")
         while True:
             fsl = self.q_upload.get()
             if not fsl:
@@ -1474,6 +1499,9 @@ class Ctl(object):
             file = fsl.file
             cids = fsl.cids
             self.last_file = file
+
+            if self.oneconn and drop_hs == (file.t_hs, file.wark):
+                continue
 
             with self.mutex:
                 if not self.uploader_busy:
@@ -1500,6 +1528,9 @@ class Ctl(object):
                 t = "upload failed, retrying: %s #%s+%d (%s)\n"
                 eprint(t % (file.name, cids[0][:8], len(cids) - 1, ex))
                 file.cd = time.time() + self.ar.cd
+                if self.oneconn:
+                    file.ucids = []
+                    drop_hs = (file.t_hs, file.wark)
                 # handshake will fix it
 
             with self.mutex:
@@ -1557,7 +1588,7 @@ NOTE: if server has --usernames enabled, then password is "username:password"
     ap.add_argument("url", type=unicode, help="server url, including destination folder")
     ap.add_argument("files", type=files_decoder, nargs="+", help="files and/or folders to process")
     ap.add_argument("-v", action="store_true", help="verbose")
-    ap.add_argument("-a", metavar="PASSWD", default="", help="password (or $filepath) for copyparty (is sent in header 'PW')")
+    ap.add_argument("-a", metavar="PASSWD", default="", help="password (or $filepath) for copyparty (is sent in header 'PW'), default is env.var U2C_PW")
     ap.add_argument("--ba", metavar="PASSWD", default="", help="password (or $filepath) for basic-auth (usually not necessary)")
     ap.add_argument("-s", action="store_true", help="file-search (disables upload)")
     ap.add_argument("-x", type=unicode, metavar="REGEX", action="append", help="skip file if filesystem-abspath matches REGEX (option can be repeated), example: '.*/\\.hist/.*'")
@@ -1586,6 +1617,7 @@ NOTE: if server has --usernames enabled, then password is "username:password"
     ap.add_argument("--wsalt", type=unicode, metavar="S", default="hunter2", help="salt to use when creating warks; must match server config")
     ap.add_argument("--chs", action="store_true", help="verbose (print the hash/offset of each chunk in each file)")
     ap.add_argument("--jw", action="store_true", help="just identifier+filepath, not mtime/size too")
+    ap.add_argument("--stdin", action="store_true", help="calculate file-ID of stdin; u2c.py --stdin - $LEN < a.mkv")
 
     ap = app.add_argument_group("performance tweaks")
     ap.add_argument("-j", type=int, metavar="CONNS", default=2, help="parallel connections")
@@ -1615,6 +1647,10 @@ NOTE: if server has --usernames enabled, then password is "username:password"
                 input()
             except:
                 pass
+
+    if ar.stdin:
+        wark_stdin(ar)
+        return
 
     # msys2 doesn't uncygpath absolute paths with whitespace
     if not VT100:
@@ -1704,6 +1740,9 @@ NOTE: if server has --usernames enabled, then password is "username:password"
             print("reading password from file [%s]" % (zs[1:],))
             with open(zs[1:], "rb") as f:
                 setattr(ar, k, f.read().decode("utf-8").strip())
+
+    if not ar.a:
+        ar.a = os.environ.get("U2C_PW", "")
 
     if ar.ba:
         ar.ba = "Basic " + base64.b64encode(ar.ba.encode("utf-8")).decode("utf-8")

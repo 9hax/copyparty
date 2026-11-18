@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import argparse
 import json
@@ -15,8 +15,11 @@ from .authsrv import VFS
 from .bos import bos
 from .util import (
     FFMPEG_URL,
+    LOG,
     REKOBO_LKEY,
+    SCWD,
     VF_CAREFUL,
+    absreal,
     expand_osenv_c,
     fsenc,
     gzip,
@@ -27,6 +30,9 @@ from .util import (
     sfsenc,
     uncyg,
     wunlink,
+    zip_fi,
+    zip_lim,
+    zip_readf,
 )
 
 if True:  # pylint: disable=using-constant-test
@@ -46,24 +52,36 @@ except:
     HAVE_MUTAGEN = False
 
 
-def have_ff(scmd: str) -> bool:
-    if ANYWIN:
+def have_ff(name: str) -> list[bytes]:
+    uname = name.upper()
+    if os.environ.get("PRTY_NO_" + uname):
+        return []
+
+    ebin = os.environ.get("PRTY_%s_BIN" % (uname,))
+    try:
+        scmd = (ebin or name).decode("utf-8")
+    except:
+        scmd: str = ebin or name
+
+    if ANYWIN and not ebin:
         scmd += ".exe"
 
     if PY2:
-        print("# checking {}".format(scmd))
-        acmd = (scmd + " -version").encode("ascii").split(b" ")
+        print("# checking %s" % (scmd,))
+        bcmd = scmd.encode("utf-8")
         try:
-            sp.Popen(acmd, stdout=sp.PIPE, stderr=sp.PIPE).communicate()
-            return True
+            sp.Popen([bcmd, b"-version"], stdout=sp.PIPE, stderr=sp.PIPE).communicate()
+            return [bcmd]
         except:
-            return False
+            return []
     else:
-        return bool(shutil.which(scmd))
+        ret = shutil.which(scmd)
+        return [absreal(ret).encode("utf-8")] if ret else []
 
 
-HAVE_FFMPEG = not os.environ.get("PRTY_NO_FFMPEG") and have_ff("ffmpeg")
-HAVE_FFPROBE = not os.environ.get("PRTY_NO_FFPROBE") and have_ff("ffprobe")
+HAVE_FFMPEG = have_ff("ffmpeg")
+HAVE_FFPROBE = have_ff("ffprobe")
+TH_BWRAP = []
 
 CBZ_PICS = set("png jpg jpeg gif bmp tga tif tiff webp avif jxl".split())
 CBZ_01 = re.compile(r"(^|[^0-9v])0+[01]\b")
@@ -159,7 +177,7 @@ def au_unpk(
             zil = [x for x in zil if x.filename.lower().split(".")[-1] == au]
             if not zil:
                 raise Exception("no audio inside zip")
-            fi = zf.open(zil[0])
+            fi = zf.open(zip_lim(zil[0], maxsz))
 
         elif pk == "cbz":
             import zipfile
@@ -173,11 +191,18 @@ def au_unpk(
             t = "cbz: %d files, %d hits" % (nf, len(znil))
             if not znil:
                 raise Exception("no images inside cbz")
-            using = sorted(znil)[0][1].filename
+            zi = sorted(znil)[0][1]
             if znil:
-                t += ", using " + using
+                t += ", using " + zi.filename
             log(t)
-            fi = zf.open(using)
+            fi = zf.open(zip_lim(zi, maxsz))
+
+        elif pk == "kra" or pk == "ora":
+            import zipfile
+
+            zf = zipfile.ZipFile(abspath, "r")
+            zi = zip_fi(zf, "mergedimage.png", maxsz)
+            fi = zf.open(zi)
 
         elif pk == "epub":
             fi = get_cover_from_epub(log, abspath)
@@ -214,19 +239,37 @@ def au_unpk(
         return abspath
 
 
+def bwrap(prog: bytes, ap_in: bytes, ap_out: bytes) -> list[bytes]:
+    if not TH_BWRAP:
+        return [prog]
+    ret = TH_BWRAP + [b"--ro-bind", prog, prog, b"--ro-bind", ap_in, ap_in]
+    if ap_out:
+        zs = ap_out.rsplit(b"/", 1)[0]
+        ret += [b"--bind", zs, zs]
+    ret.append(prog)
+    return ret
+
+
+def bwrap_fail(serr: str) -> None:
+    if "bwrap:" in serr:
+        LOG[0]("root", "ffmpeg failed due to --th-bwrap;\n  " + serr, 3)
+
+
 def ffprobe(
     abspath: str, timeout: int = 60
 ) -> tuple[dict[str, tuple[int, Any]], dict[str, list[Any]], list[Any], dict[str, Any]]:
     # ffprobe -hide_banner -show_streams -show_format --
-    cmd = [
-        b"ffprobe",
+    bap = fsenc(abspath)
+    cmd = bwrap(HAVE_FFPROBE[0], bap, b"") + [
         b"-hide_banner",
         b"-show_streams",
         b"-show_format",
         b"--",
-        fsenc(abspath),
+        bap,
     ]
-    rc, so, se = runcmd(cmd, timeout=timeout, nice=True, oom=200)
+    rc, so, se = runcmd(cmd, cwd=SCWD, timeout=timeout, nice=True, oom=200)
+    if rc and TH_BWRAP:
+        bwrap_fail(se)
     retchk(rc, cmd, se)
     return parse_ffprobe(so)
 
@@ -399,7 +442,8 @@ def get_cover_from_epub(log: "NamedLogger", abspath: str) -> Optional[IO[bytes]]
     with zipfile.ZipFile(abspath, "r") as z:
         # First open the container file to find the package document (.opf file)
         try:
-            container_root = parse_xml(z.read("META-INF/container.xml").decode())
+            zb = zip_readf(z, "META-INF/container.xml", 2 << 20)
+            container_root = parse_xml(zb.decode())
         except KeyError:
             log("epub: no container file found in %s" % (abspath,))
             return None
@@ -413,7 +457,8 @@ def get_cover_from_epub(log: "NamedLogger", abspath: str) -> Optional[IO[bytes]]
 
         # Then open the first package document to find the path of the cover image
         try:
-            package_root = parse_xml(z.read(rootfile_path).decode())
+            zb = zip_readf(z, rootfile_path, 2 << 20)
+            package_root = parse_xml(zb.decode())
         except KeyError:
             log("epub: no package document found in %s" % (abspath,))
             return None
@@ -437,7 +482,8 @@ def get_cover_from_epub(log: "NamedLogger", abspath: str) -> Optional[IO[bytes]]
         adjusted_cover_path = urljoin(rootfile_path, coverimage_path)
 
         try:
-            return z.open(adjusted_cover_path)
+            zi = zip_fi(z, adjusted_cover_path, 2 << 24)
+            return z.open(zi)
         except KeyError:
             t = "epub: cover specified in package document, but doesn't exist: %s"
             log(t % (adjusted_cover_path,))

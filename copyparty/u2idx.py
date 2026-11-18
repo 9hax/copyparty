@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import calendar
 import os
@@ -22,10 +22,19 @@ from .util import (
     quotep,
     s3dec,
     vjoin,
+    vjoins,
 )
 
 if HAVE_SQLITE3:
     import sqlite3
+
+try:
+    if os.environ.get("PRTY_NO_UNIDATA"):
+        raise Exception()
+
+    import unicodedata
+except:
+    pass
 
 try:
     from pathlib import Path
@@ -42,6 +51,14 @@ if PY2:
     range = xrange  # type: ignore
 
 
+def norm_icase(txt: str) -> str:
+    return txt.casefold() if txt else txt
+
+
+def norm_nfkc(txt: str) -> str:
+    return unicodedata.normalize("NFKC", txt).casefold() if txt else txt
+
+
 class U2idx(object):
     def __init__(self, hsrv: "HttpSrv") -> None:
         self.log_func = hsrv.log
@@ -54,6 +71,10 @@ class U2idx(object):
             return
 
         if self.args.srch_icase:
+            if self.args.srch_nfkc:
+                self.normfun = norm_nfkc
+            else:
+                self.normfun = norm_icase
             self._open_db = self._open_db_icase
         else:
             self._open_db = self._open_db_std
@@ -81,7 +102,7 @@ class U2idx(object):
 
     def _open_db_icase(self, *args, **kwargs):
         db = self._open_db_std(*args, **kwargs)
-        db.create_function("casefold", 1, lambda x: x.casefold() if x else x)
+        db.create_function("casefold", 1, self.normfun)
         return db
 
     def shutdown(self) -> None:
@@ -322,7 +343,7 @@ class U2idx(object):
 
             if icase and "casefold(" in q:
                 try:
-                    v = unicode(v).casefold()
+                    v = self.normfun(unicode(v))
                 except:
                     v = unicode(v).lower()
 
@@ -437,7 +458,7 @@ class U2idx(object):
                 if rd.startswith("//") or fn.startswith("//"):
                     rd, fn = s3dec(rd, fn)
 
-                vp = vjoin(vjoin(vtop, rd), fn)
+                vp = vjoins(vtop, rd, fn)
 
                 if vp in seen_rps:
                     continue

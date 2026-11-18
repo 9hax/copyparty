@@ -1,11 +1,10 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import errno
 import re
 import select
 import socket
-import time
 
 from .__init__ import TYPE_CHECKING
 from .multicast import MC_Sck, MCast

@@ -76,6 +76,7 @@ built in Norway 🇳🇴 with contributions from [not-norway](https://github.com
         * [connecting to webdav from windows](#connecting-to-webdav-from-windows) - using the GUI
     * [tftp server](#tftp-server) - a TFTP server (read/write) can be started using `--tftp 3969`
     * [smb server](#smb-server) - unsafe, slow, not recommended for wan
+    * [wopi server](#wopi-server) - edit office documents in the web-ui
     * [browser ux](#browser-ux) - tweaking the ui
     * [opengraph](#opengraph) - discord and social-media embeds
     * [file deduplication](#file-deduplication) - enable symlink-based upload deduplication
@@ -83,6 +84,7 @@ built in Norway 🇳🇴 with contributions from [not-norway](https://github.com
         * [exclude-patterns](#exclude-patterns) - to save some time
         * [filesystem guards](#filesystem-guards) - avoid traversing into other filesystems
         * [periodic rescan](#periodic-rescan) - filesystem monitoring
+    * [u2sz](#u2sz) - configure upload-chunking
     * [upload rules](#upload-rules) - set upload rules using volflags
     * [compress uploads](#compress-uploads) - files can be autocompressed on upload
     * [chmod and chown](#chmod-and-chown) - per-volume filesystem-permissions and ownership
@@ -136,6 +138,7 @@ built in Norway 🇳🇴 with contributions from [not-norway](https://github.com
     * [client-side](#client-side) - when uploading files
 * [security](#security) - there is a [discord server](https://discord.gg/25J8CdTT6G) with announcements
     * [gotchas](#gotchas) - behavior that might be unexpected
+    * [csp nonce](#csp-nonce) - unauthorized javascript is blocked
     * [cors](#cors) - cross-site request config
     * [filekeys](#filekeys) - prevent filename bruteforcing
         * [dirkeys](#dirkeys) - share specific folders in a volume
@@ -216,6 +219,8 @@ other places to download copyparty from  (non-github links):
   * https://copyparty.eu/enz = https://copyparty.eu/copyparty-en.pyz = the enterprise pyz
   * https://copyparty.eu/cli = online cli helptext
 
+DO NOT download from [sourceforge](https://copyparty.eu/unsanctioned/sourceforge.txt)
+
 
 ### at home
 
@@ -241,6 +246,11 @@ you may also want these, especially on servers:
 * [contrib/rc/copyparty](contrib/rc/copyparty) to run copyparty on FreeBSD
 * [nixos module](#nixos-module) to run copyparty on NixOS hosts
 * [contrib/nginx/copyparty.conf](contrib/nginx/copyparty.conf) to [reverse-proxy](#reverse-proxy) behind nginx (for better https)
+
+because the following environment variables are commonly used in service-scripts, they are understood by copyparty:
+
+* `NOTIFY_SOCKET` as provided by systemd with service type=notify (see systemd/copyparty.service above)
+* `S6_NOTIFY_FD` for dinit [`ready-notification = pipevar:S6_NOTIFY_FD`](https://davmac.org/projects/dinit/man-pages-html/dinit-service.5.html#ready) and [s6 supervision suite notification](https://skarnet.org/software/s6/notifywhenup.html) support
 
 and remember to open the ports you want; here's a complete example including every feature copyparty has to offer:
 ```
@@ -297,7 +307,7 @@ also see [comparison to similar software](./docs/versus.md)
     * ☑ realtime streaming of growing files (logfiles and such)
   * ☑ [thumbnails](#thumbnails)
     * ☑ ...of images using Pillow, pyvips, or FFmpeg
-    * ☑ ...of RAW images using rawpy
+    * ☑ ...of RAW images using libraw-dcraw_emu or rawpy
     * ☑ ...of videos using FFmpeg
     * ☑ ...of audio (spectrograms) using FFmpeg
     * ☑ cache eviction (max-age; maybe max-size eventually)
@@ -518,6 +528,7 @@ upgrade notes
 per-folder, per-user permissions  - if your setup is getting complex, consider making a [config file](./docs/example.conf) instead of using arguments
 * much easier to manage, and you can modify the config at runtime with `systemctl reload copyparty` or more conveniently using the `[reload cfg]` button in the control-panel (if the user has `a`/admin in any volume)
   * changes to the `[global]` config section requires a restart to take effect
+* when using config-files, ignore all the `-a` and `-v` stuff below, and CTRL-F `config file example` on this page instead
 
 a quick summary can be seen using [`--help-accounts`](https://copyparty.eu/cli/#accounts-help-page)
 
@@ -561,11 +572,13 @@ if you want to grant access to all users who are logged in, the group `acct` wil
 * to do the opposite, granting access to everyone who is NOT logged in. `*,-@acct` does the trick, for example `-v /srv/welcome:welcome:r,*,-@acct`
 * single users can also be subtracted from a group: `@admins,-james`
 
-anyone trying to bruteforce a password gets banned according to `--ban-pw`; default is 24h ban for 9 failed attempts in 1 hour
+anyone trying to bruteforce a password gets banned according to `--ban-pw` (assuming [real-ip](#real-ip) is configured correctly); default is 24h ban for 9 failed attempts in 1 hour
 
 and if you want to use config files instead of commandline args (good!) then here's the same examples as a configfile; save it as `foobar.conf` and use it like this: `python copyparty-sfx.py -c foobar.conf`
 
 * you can also `PRTY_CONFIG=foobar.conf python copyparty-sfx.py` (convenient in docker etc)
+
+config file example:
 
 ```yaml
 [accounts]
@@ -609,13 +622,29 @@ and if you want to use config files instead of commandline args (good!) then her
 
 hiding specific subfolders  by mounting another volume on top of them
 
+> **WARNING:** shadowing is NOT bulletproof when the underlying filesystem is casefolding (case-insensitive), in other words DON'T rely on this when copyparty is running on Windows and/or MacOS. This is also unsafe when combined with certain filesystems on Linux, especially FAT32/exFAT. Pay attention to the volume-listing in the startup log; `casechk:n` indicates probably-OK, but if it says `casechk:y` then DO NOT trust shadowing to fully prevent access to a file/subfolder.
+
 for example `-v /mnt::r -v /var/empty:web/certs:` (note: no permissions) mounts the server folder `/mnt` as the webroot, but another volume is mounted at `/web/certs` -- so visitors can only see the contents of `/mnt` and `/mnt/web` (at URLs `/` and `/web`), but not `/mnt/web/certs` because URL `/web/certs` is mapped to `/var/empty`
+
+to fully unmap it from the filesystem, specify `//NULL` instead of a real path such as `/var/empty`, so for example `-v /mnt::r -v //NULL:web/certs:` ensures `/web/certs` will never be accessible by anyone
 
 the example config file right above this section may explain this better; the first volume `/` is mapped to `/srv` which means http://127.0.0.1:3923/music would try to read `/srv/music` on the server filesystem, but since there's another volume at `/music` mapped to `/mnt/music` then it'll go to `/mnt/music` instead
 
 so, to shadow a file/folder, define a volume but leave out the `accs:` section
 
 > ℹ️ this also works for single files, because files can also be volumes
+
+config file example for unmapping folders by shadowing:
+
+```yaml
+[/drives]
+  /mnt   # url "/drives" goes to "/mnt"
+  accs:
+    r: *  # everyone can read
+
+[/drives/foo/bar]
+  //NULL  # blocks access to "/mnt/foo/bar"
+```
 
 
 ## dotfiles
@@ -754,7 +783,7 @@ press `g` or `田` to toggle grid-view instead of the file listing  and `t` togg
 ![copyparty-thumbs-fs8](https://user-images.githubusercontent.com/241032/129636211-abd20fa2-a953-4366-9423-1c88ebb96ba9.png)
 
 it does static images with Pillow / pyvips / FFmpeg, and uses FFmpeg for video files, so you may want to `--no-thumb` or maybe just `--no-vthumb` depending on how dangerous your users are
-* pyvips is 3x faster than Pillow, Pillow is 3x faster than FFmpeg
+* Pillow is 3x faster (and safer) than FFmpeg
 * disable thumbnails for specific volumes with volflag `dthumb` for all, or `dvthumb` / `dathumb` / `dithumb` for video/audio/images only
 * for installing FFmpeg on windows, see [optional dependencies](#optional-dependencies)
 
@@ -763,6 +792,7 @@ audio files are converted into spectrograms using FFmpeg unless you `--no-athumb
 images with the following names (see `--th-covers`) become the thumbnail of the folder they're in: `folder.png`, `folder.jpg`, `cover.png`, `cover.jpg`
 * the order is significant, so if both `cover.png` and `folder.jpg` exist in a folder, it will pick the first matching `--th-covers` entry (`folder.jpg`)
 * and, if you enable [file indexing](#file-indexing), it will also try those names as dotfiles (`.folder.jpg` and so), and then fallback on the first picture in the folder (if it has any pictures at all)
+* disable folderthumbs with `--th-covers no`
 
 enabling `multiselect` lets you click files to select them, and then shift-click another file for range-select
 * `multiselect` is mostly intended for phones/tablets, but the `sel` option in the `[⚙️] settings` tab is better suited for desktop use, allowing selection by CTRL-clicking and range-selection with SHIFT-click, all without affecting regular clicking
@@ -831,6 +861,7 @@ you can also zip a selection of files or folders by clicking them in the browser
 
 cool trick: download a folder by appending url-params `?tar&opus` or `?tar&mp3` to transcode all audio files (except aac|m4a|mp3|ogg|opus|wma) to opus/mp3 before they're added to the archive
 * super useful if you're 5 minutes away from takeoff and realize you don't have any music on your phone but your server only has flac files and downloading those will burn through all your data + there wouldn't be enough time anyways
+* and url-param `&name=foo` changes the name of the toplevel folder in the archive to `foo`, and just `&name` removes the folder entirely
 * and url-param `&nodot` skips dotfiles/dotfolders; they are included by default if your account has permission to see them
 * and url-params `&j` / `&w` produce jpeg/webm thumbnails/spectrograms instead of the original audio/video/images (`&p` for audio waveforms)
   * can also be used to pregenerate thumbnails; combine with `--th-maxage=9999999` or `--th-clean=0`
@@ -899,7 +930,7 @@ note that since up2k has to read each file twice, `[🎈] bup` can *theoreticall
 
 if you are resuming a massive upload and want to skip hashing the files which already finished, you can enable `turbo` in the `[⚙️] config` tab, but please read the tooltip on that button
 
-if the server is behind a proxy which imposes a request-size limit, you can configure up2k to sneak below the limit with server-option `--u2sz` (the default is 96 MiB to support Cloudflare)
+if the server is behind a proxy which imposes a request-size limit, you can configure up2k to sneak below the limit with server-option [--u2sz](#u2sz)
 
 if you want to replace existing files on the server with new uploads by default, run with `--u2ow 2` (only works if users have the delete-permission, and can still be disabled with `🛡️` in the UI)
 
@@ -1181,7 +1212,7 @@ open the `[🎺]` media-player-settings tab to configure it,
   * `[flac]` converts `flac` and `wav` files into opus (if supported by browser) or mp3
   * `[aac]` converts `aac` and `m4a` files into opus (if supported by browser) or mp3
   * `[oth]` converts all other known formats into opus (if supported by browser) or mp3
-    * `aac|ac3|aif|aiff|alac|alaw|amr|ape|au|dfpwm|dts|flac|gsm|it|m4a|m4b|m4r|mo3|mod|mp2|mp3|mpc|mptm|mt2|mulaw|ogg|okt|opus|ra|s3m|tak|tta|ulaw|wav|wma|wv|xm|xpk`
+    * `aac|ac3|aif|aiff|alac|alaw|amr|ape|au|dfpwm|dts|flac|gsm|it|m4a|m4b|m4r|mka|mo3|mod|mp2|mp3|mpc|mptm|mt2|mulaw|ogg|okt|opus|ra|s3m|tak|tta|ulaw|wav|wma|wv|xm|xpk`
 * "transcode to":
   * `[opus]` produces an `opus` whenever transcoding is necessary (the best choice on Android and PCs)
   * `[awo]` is `opus` in a `weba` file, good for iPhones (iOS 17.5 and newer) but Apple is still fixing some state-confusion bugs as of iOS 18.2.1
@@ -1317,7 +1348,8 @@ for the above example to work, add the commandline argument `-e2ts` to also scan
 # server config
 
 using arguments or config files, or a mix of both:
-* config files (`-c some.conf`) can set additional commandline arguments; see [./docs/example.conf](docs/example.conf) and [./docs/example2.conf](docs/example2.conf)
+* using a config-file (`-c some.conf`) is best, easier to read/maintain; see [./docs/example.conf](docs/example.conf)
+  * for complex and intricate setups, see how [./docs/example2.conf](docs/example2.conf) includes additional config-files/folders with `% copyparty.d` which loads [./docs/copyparty.d/some.conf](docs/copyparty.d/some.conf)
 * `kill -s USR1` (same as `systemctl reload copyparty`) to reload accounts and volumes from config files without restarting
   * or click the `[reload cfg]` button in the control-panel if the user has `a`/admin in any volume
   * changes to the `[global]` config section requires a restart to take effect
@@ -1331,9 +1363,15 @@ using arguments or config files, or a mix of both:
 
 sleep better at night  by telling copyparty to periodically check whether your version has a [known vulnerability](https://github.com/9001/copyparty/security/advisories)
 
-this feature can be enabled by setting the global-option `--vc-url` to one of the following URLs; all of them provide the same information, so which one you choose is whatever
-* `https://api.copyparty.eu/advisories`
-* `https://api.github.com/repos/9001/copyparty/security-advisories?per_page=9`
+this feature can be enabled by setting the global-option `--vc-url` to one of the following URLs; choose what severity level you want to be notified for:
+* `https://api.copyparty.eu/advisories-panic` -- only really bad stuff, the "UPGRADE NOW" kind
+* `https://api.copyparty.eu/advisories` -- everything important / noteworthy, "upgrade when you can"
+* `https://api.copyparty.eu/advisories-all` -- *everything*, including stuff that's unlikely to affect anyone
+* `https://api.github.com/repos/9001/copyparty/security-advisories?per_page=9` -- same as `advisories-all`
+
+note that `https://api.copyparty.eu/advisories` may (for example) skip some advisories rated `High` but include some `Low`; that's because an easily-reachable `Low` in a default-enabled feature is more severe than a `High` which is a theoretical bug in a contrived use of a fringe feature, but the CVE calculator would still classify that as `High`
+
+if you want to use the github advisory feed but only care about advisories rated `medium`/`moderate` or higher, then global-option `--vc-sev medium` does that, but see previous paragraph
 
 > to see what happens when a bad version is detected, try `--vc-url https://api.copyparty.eu/advisories-test`
 
@@ -1349,6 +1387,7 @@ config file example:
   vc-url: https://api.copyparty.eu/advisories
   vc-age: 3  # how many hours to wait between each check
   vc-exit    # emergency-exit if current version is vulnerable
+  vc-sev: medium  # only care about severity 'Medium'/'Moderate' or higher (github-only; don't use this with api.copyparty.eu)
 ```
 
 
@@ -1602,6 +1641,15 @@ authenticate with one of the following:
 * username `$password`, password `k`
 
 
+## wopi server
+
+edit office documents in the web-ui
+
+needs a wopi client to work, and the only supported wopi client is a selfhosted collabora online server; eventually onlyoffice will probably also be supported: [issue #1574](https://github.com/9001/copyparty/issues/1574)
+
+no further documentation or examples yet, [issue #1575](https://github.com/9001/copyparty/issues/1575)
+
+
 ## browser ux
 
 tweaking the ui
@@ -1757,11 +1805,16 @@ avoid traversing into other filesystems  using `--xdev` / volflag `:c,xdev`, ski
 
 and/or you can `--xvol` / `:c,xvol` to ignore all symlinks leaving the volume's top directory, but still allow bind-mounts pointing elsewhere
 
-* symlinks are permitted with `xvol` if they point into another volume where the user has the same level of access
+* symlinks are permitted with `xvol` if they point into another volume where the user also has some sort of access
+  * usually keeps permissions from outer/initial volume, but don't take that for granted
 
-these options will reduce performance; unlikely worst-case estimates are 14% reduction for directory listings, 35% for download-as-tar
+these options will reduce performance; unlikely worst-case estimates are 27% reduction for directory listings, 35% for download-as-tar
+
+* if the underlying storage is [a network disk](#using-the-cloud-as-storage) then xvol/xdev will be **very** slow (not to mention pointless/useless)
 
 as of copyparty v1.7.0 these options also prevent file access at runtime -- in previous versions it was just hints for the indexer
+
+> **WARNING:** the `xvol` and `xdev` options should NOT be relied on for security; these are originally and primarily intended for the [e2ds indexer](#file-indexing). Certain underlying filesystems (especially FUSE-based and casefolding ones) will be problematic, and symlinks inherently have various TOCTOUs, and there's probably also bugs in copyparty where xvol/xdev is not fully enforced for certain APIs. The developer does not care about these options and they do not receive much testing.
 
 ### periodic rescan
 
@@ -1784,6 +1837,23 @@ config file example:
   flags:
     scan: 900
 ```
+
+
+## u2sz
+
+configure upload-chunking;  the default `64,96` is optimal for nearly every scenario, however:
+
+* if you are seeing the message `bad server config; see "u2sz" in readme` then you have a proxy/CDN/whatever with a `max-request-body-size` which is too small, and you must either increase the limit in the reverseproxy config to at least 96 MiB (recommended) or reduce the target chunksize in copyparty (continue reading)
+
+the global-option `--u2sz` is two numbers, `target,max` MiB of each chunk to send, aiming for `target` MiB and allowing up-to-and-including `max` MiB [depending on filesize](./docs/devnotes.md#list-of-chunk-sizes), and if you only specify one number then it sets that for both
+
+cloudflare max is 96 MiB, but if you have a reverseproxy (or CDN/WAF/whatever) which is more restrictive, then try some of the following:
+
+* `u2sz: 32` is still acceptable performance in most cases
+* `u2sz: 8` is the lowest recommended value; anything lower will reduce performance over long physical distances and/or shitty routes
+* `u2sz: 1` is the absolute minimum, and will be slow in many cases
+
+the setting can also be changed in the web-UI; the textbox next to `date-chk` in the settings tab
 
 
 ## upload rules
@@ -2137,7 +2207,7 @@ as for client-side stuff, there is [plugins for modifying UI/UX](./contrib/plugi
 
 autologin based on IP range (CIDR)  , using the global-option `--ipu`
 
-for example, if everyone with an IP that starts with `192.168.123` should automatically log in as the user `spartacus`, then you can either specify `--ipu=192.168.123.0/24=spartacus` as a commandline option, or put this in a config file:
+for example, if everyone with an IP that starts with `192.168.123` should automatically log in as the user `spartacus`, then you can either specify `--ipu=192.168.123.0/24=spartacus` as a commandline option, same as this config file example:
 
 ```yaml
 [global]
@@ -2153,7 +2223,7 @@ repeat the option to map additional subnets
 
 limit a user to certain IP ranges (CIDR)  , using the global-option `--ipr`
 
-for example, if the user `spartacus` should get rejected if they're not connecting from an IP that starts with `192.168.123` or `172.16`, then you can either specify `--ipr=192.168.123.0/24,172.16.0.0/16=spartacus` as a commandline option, or put this in a config file:
+for example, if the user `spartacus` should get rejected if they're not connecting from an IP that starts with `192.168.123` or `172.16`, then you can either specify `--ipr=192.168.123.0/24,172.16.0.0/16=spartacus` as a commandline option, same as this config file example:
 
 ```yaml
 [global]
@@ -2190,7 +2260,7 @@ but if you just want to let users change their own passwords, then you probably 
 
 other ways to auth by header
 
-if you have a middleware which adds a header with a user identifier, for example tailscale's `Tailscale-User-Login: alice.m@forest.net` then you can automatically auth as `alice` by defining that mapping with `--idp-hm-usr '^Tailscale-User-Login^alice.m@forest.net^alice'` or the following config file:
+if you have a middleware which adds a header with a user identifier, for example tailscale's `Tailscale-User-Login: alice.m@forest.net` then you can automatically auth as `alice` by defining that mapping with `--idp-hm-usr '^Tailscale-User-Login^alice.m@forest.net^alice'` or the following config file example:
 
 ```yaml
 [global]
@@ -2321,9 +2391,7 @@ if you want to change the fonts, see [./docs/rice/](./docs/rice/)
 
 become a *real* webserver  which people can access by just going to your IP or domain without specifying a port
 
-**if you're on windows,** then you just need to add the commandline argument `-p 80,443` and you're done! nice
-
-**if you're on macos,** sorry, I don't know
+**if you're on windows or macos,** then you just need to add the commandline argument `-p 80,443` and you're done! nice
 
 **if you're on Linux,** you have the following 4 options:
 
@@ -2513,7 +2581,7 @@ change the association of a file extension
 
 using commandline args, you can do something like `--mime gif=image/jif` and `--mime ts=text/x.typescript` (can be specified multiple times)
 
-in a config file, this is the same as:
+that's the same as this config file example:
 
 ```yaml
 [global]
@@ -2550,6 +2618,7 @@ buggy feature? rip it out  by setting any of the following environment variables
 | `PRTY_NO_IPV6`       | disable some ipv6 support (should not be necessary since windows 2000) |
 | `PRTY_NO_LZMA`       | disable streaming xz compression of incoming uploads |
 | `PRTY_NO_MP`         | disable all use of the python `multiprocessing` module (actual multithreading, cpu-count for parsers/thumbnailers) |
+| `PRTY_NO_UNIDATA`    | disable loading the unicodedata c-extension; saves 400k ram, breaks `--srch-nfkc` |
 | `PRTY_NO_SQLITE`     | disable all database-related functionality (file indexing, metadata indexing, most file deduplication logic) |
 | `PRTY_NO_TLS`        | disable native HTTPS support; if you still want to accept HTTPS connections then TLS must now be terminated by a reverse-proxy |
 | `PRTY_NO_TPOKE`      | disable systemd-tmpfilesd avoider |
@@ -2579,7 +2648,7 @@ if your distro/OS is not mentioned below, there might be some hints in the [«on
 
 `pacman -S copyparty` (in [arch linux extra](https://archlinux.org/packages/extra/any/copyparty/))
 
-it comes with a [systemd service](./contrib/systemd/copyparty@.service) as well as a [user service](./contrib/systemd/copyparty-user.service), and expects to find a [config file](./contrib/systemd/copyparty.example.conf) in `/etc/copyparty/copyparty.conf` or `~/.config/copyparty/copyparty.conf`
+it comes with a [systemd service](./contrib/systemd/copyparty@.service) as well as a [user service](./contrib/systemd/copyparty-user.service), and expects to find a [config file](./contrib/systemd/copyparty.example.conf) in `/etc/copyparty.conf` or `~/.config/copyparty/copyparty.conf`
 
 after installing, start either the system service or the user service and navigate to http://127.0.0.1:3923 for further instructions (unless you already edited the config files, in which case you are good to go, probably)
 
@@ -2624,8 +2693,6 @@ the homebrew package is maintained by the homebrew team (thanks!)
 requires a [flake-enabled](https://nixos.wiki/wiki/Flakes) installation of nix
 
 some recommended dependencies are enabled by default; [override the package](https://github.com/9001/copyparty/blob/hovudstraum/contrib/package/nix/copyparty/default.nix#L3-L22) if you want to add/remove some features/deps
-
-`ffmpeg-full` was chosen over `ffmpeg-headless` mainly because we need `withWebp` (and `withOpenmpt` is also nice) and being able to use a cached build felt more important than optimizing for size at the time -- PRs welcome if you disagree 👍
 
 
 ## nixos module
@@ -2987,7 +3054,7 @@ below are some tweaks roughly ordered by usefulness:
   * and pypy can sometimes crash on startup with `-j0` (TODO make issue)
 
 * if you are running the copyparty server **on Windows or Macos:**
-  * `--casechk=n` makes it much faster, but also awakens [the usual surprises](https://github.com/9001/copyparty/issues/781) you expect from a case-insensitive filesystem
+  * `--casechk=n` makes it much faster, but [reduces security](https://github.com/9001/copyparty/security/advisories/GHSA-3c88-p299-7hvr) and awakens [the usual surprises](https://github.com/9001/copyparty/issues/781) you expect from a case-insensitive filesystem
     * this is the same as `casechk: n` in a config-file
 
 
@@ -3025,6 +3092,9 @@ some notes on hardening
   * the `nohtml` volflag also enables `noscript` which, on its own, prevents *most* javascript from running; enabling just `noscript` without `nohtml` makes it probably-safe (see below) to view html and svg files, but `nohtml` is necessary to block javascript in markdown documents
     * "probably-safe" because it relies on `Content-Security-Policy` so it depends on the reverseproxy to forward it, and the browser to understand it, but `nohtml` (the nuclear option) always works
 * when running behind a reverse-proxy, listen on a unix-socket for tighter access control (and more performance); see [reverse-proxy](#reverse-proxy) or [`--help-bind`](https://copyparty.eu/cli/#bind-help-page)
+* put ffmpeg into a sandbox (helps against future ffmpeg vulns) by configuring [--th-bwrap](https://copyparty.eu/cli/#g-th-bwrap) and enable it with `--use-bwrap y`
+  * usually impossible when running in docker or podman
+  * the default value of `--th-bwrap` (see `--help` on your own server) is autogenerated best-effort guess based on your setup; installing `bwrap` and configuring this is up to you (good luck)
 
 safety profiles:
 
@@ -3068,6 +3138,23 @@ behavior that might be unexpected
   * or eliminate the problem entirely by only giving write-access to trustworthy people :^)
 
 
+## csp nonce
+
+unauthorized javascript is blocked  by means of the default [content-security-policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP) which enforces "script nonces", to help prevent XSS and similar
+
+usually this Just Works and is correctly configured by default; you can stop reading this section and move on, nothing to see here
+
+but if you are the unlucky 0.1% with a hosting-setup funky enough for this to not work as intended, then you will also be seeing this message: `Looks like javascript is broken; see "csp nonce" in the readme`
+
+there is two possible reasons why this might happen:
+
+1. your browser is simply too old to understand the javascript, which is not likely, because just about every browser is supported, even internet explorer 11
+
+2. something in your hosting-setup is tampering with the responses from copyparty and destroying this security feature; the culprit is probably a misconfigured reverseproxy, a CDN, a WAF, or some other mitm, but a popular offender is **"cloudflare rocket loader"**
+
+you can try to **temporarily** set global-options `--csp-ui no` and `--csp-dl no` and restart copyparty to check whether it is due to reason #2. Remember to refresh the webbrowser with CTRL-SHIFT-R to check properly. If that makes the problem go away, then turn them back off (**never** keep them enabled), restart copyparty, open the `Network` tab in the webbrowser, and refresh the website; you should see the `content-security-policy` header including a nonce, for example `nonce-BxcJbvdu1z3S/ycPBjVWuA==` which should also appear inside the HTML of that response like this: `<script nonce="BxcJbvdu1z3S/ycPBjVWuA==">` -- if it doesn't then that's the problem; something in your hosting stack is dangerously misconfigured
+
+
 ## cors
 
 cross-site request config
@@ -3093,6 +3180,8 @@ permissions `wG` (write + upget) lets users upload files and receive their own f
 ### dirkeys
 
 share specific folders in a volume  without giving away full read-access to the rest -- the visitor only needs the `g` (get) permission to view the link
+
+> ℹ️ a better alternative to this is [shares](#shares)
 
 volflag `dk` generates dirkeys (per-directory accesskeys) for all folders, granting read-access to that folder; by default only that folder itself, no subfolders
 
@@ -3203,17 +3292,19 @@ enable [thumbnails](#thumbnails) of...
 * **HEIF pictures:** `pyvips` or `ffmpeg` or `pillow-heif`
 * **AVIF pictures:** `pyvips` or `ffmpeg` or `pillow-avif-plugin` or pillow v11.3+
 * **JPEG XL pictures:** `pyvips` or `ffmpeg`
-* **RAW images:** `rawpy`, plus one of `pyvips` or `Pillow` (for some formats)
+* **RAW photos:** either `libraw dcraw_emu` or `rawpy`, plus either `pyvips` or `Pillow`
 
 enable sending [zeromq messages](#zeromq) from event-hooks: `pyzmq`
 
 enable [smb](#smb-server) support (**not** recommended): `impacket==0.13.0`
 
-`pyvips` gives higher quality thumbnails than `Pillow` and is 320% faster, using 270% more ram
+`pyvips` adds support for some additional image formats, but can use extreme amounts of RAM
 * to install `pyvips` on Linux: `sudo apt install libvips42 && python3 -m pip install --user -U pyvips`
 * to install `pyvips` on windows: `pip install --user -U "pyvips[binary]"`
 
 to install FFmpeg on Windows, grab [a recent build](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z) -- you need `ffmpeg.exe` and `ffprobe.exe` from inside the `bin` folder; copy them into `C:\Windows\System32` or any other folder that's in your `%PATH%`
+
+if your ffmpeg/ffprobe binaries have nonstandard names -- such as `ffmpeg8` (macports) -- set environment variables `PRTY_FFMPEG_BIN` and `PRTY_FFPROBE_BIN` to the corret name (or full path)
 
 
 ### dependency chickenbits
@@ -3229,6 +3320,7 @@ set any of the following environment variables to disable its associated optiona
 | -------------------- | ------------ |
 | `PRTY_NO_ARGON2`     | disable argon2-cffi password hashing |
 | `PRTY_NO_CFSSL`      | never attempt to generate self-signed certificates using [cfssl](https://github.com/cloudflare/cfssl) |
+| `PRTY_NO_DCRAW`      | disable all [libraw](https://www.libraw.org/homepage)-based thumbnail support for RAW images |
 | `PRTY_NO_FFMPEG`     | **audio transcoding** goes byebye, **thumbnailing** must be handled by Pillow/libvips |
 | `PRTY_NO_FFPROBE`    | **audio transcoding** goes byebye, **thumbnailing** must be handled by Pillow/libvips, **metadata-scanning** must be handled by mutagen |
 | `PRTY_NO_MAGIC`      | do not use [magic](https://pypi.org/project/python-magic/) for filetype detection |
@@ -3243,7 +3335,8 @@ set any of the following environment variables to disable its associated optiona
 | `PRTY_NO_PIL_WEBP`   | disable use of native webp support in Pillow |
 | `PRTY_NO_PSUTIL`     | do not use [psutil](https://pypi.org/project/psutil/) for reaping stuck hooks and plugins on Windows |
 | `PRTY_NO_PYFTPD`     | disable ftp(s) server ([pyftpdlib](https://pypi.org/project/pyftpdlib/)-based) |
-| `PRTY_NO_RAW`        | disable all [rawpy](https://pypi.org/project/rawpy/)-based thumbnail support for RAW images |
+| `PRTY_NO_RAW`        | same as `PRTY_NO_DCRAW` plus `PRTY_NO_RAWPY` |
+| `PRTY_NO_RAWPY`      | disable all [rawpy](https://pypi.org/project/rawpy/)-based thumbnail support for RAW images |
 | `PRTY_NO_VIPS`       | disable all [libvips](https://pypi.org/project/pyvips/)-based thumbnail support; will fallback to Pillow or ffmpeg |
 
 example: `PRTY_NO_PIL=1 python3 copyparty-sfx.py`

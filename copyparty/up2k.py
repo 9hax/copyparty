@@ -1,15 +1,12 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import errno
 import hashlib
 import json
-import math
 import os
 import re
-import shutil
 import stat
-import subprocess as sp
 import sys
 import tempfile
 import threading
@@ -19,11 +16,11 @@ from copy import deepcopy
 
 from queue import Queue
 
-from .__init__ import ANYWIN, MACOS, PY2, TYPE_CHECKING, WINDOWS, E
-from .authsrv import LEELOO_DALLAS, SEESLOG, VFS, AuthSrv
+from .__init__ import ANYWIN, PY2, TYPE_CHECKING, UNIX, WINDOWS, E
+from .authsrv import LEELOO_DALLAS, REDUP_E2, SEESLOG, VFS, AuthSrv
 from .bos import bos
 from .cfg import vf_bmap, vf_cmap, vf_vmap
-from .fsutil import Fstab
+from .fsutil import Fstab, filefrag
 from .mtag import MParser, MTag
 from .util import (
     E_FS_CRIT,
@@ -55,6 +52,7 @@ from .util import (
     ren_open,
     rmdirs,
     rmdirs_up,
+    runcmd,
     runhook,
     runihook,
     s2hms,
@@ -70,9 +68,11 @@ from .util import (
     ub64enc,
     unhumanize,
     vjoin,
+    vjoins,
     vsplit,
     w8b64dec,
     w8b64enc,
+    winsparse,
     wunlink,
 )
 
@@ -102,7 +102,7 @@ ICV_EXTS = set(zsg.split(","))
 zsg = "3gp,asf,av1,avc,avi,flv,m4v,mjpeg,mjpg,mkv,mov,mp4,mpeg,mpeg2,mpegts,mpg,mpg2,mts,nut,ogm,ogv,rm,vob,webm,wmv"
 VCV_EXTS = set(zsg.split(","))
 
-zsg = "aif,aiff,alac,ape,flac,m4a,m4b,m4r,mp3,oga,ogg,opus,tak,tta,wav,wma,wv,cbz,epub"
+zsg = "aif,aiff,alac,ape,flac,m4a,m4b,m4r,mka,mp3,oga,ogg,opus,tak,tta,wav,wma,wv,cbz,epub"
 ACV_EXTS = set(zsg.split(","))
 
 zsg = "nohash noidx xdev xvol"
@@ -175,6 +175,7 @@ class Up2k(object):
         self.pp: Optional[ProgressPrinter] = None
         self.rescan_cond = threading.Condition()
         self.need_rescan: set[str] = set()
+        self.have_e2d = False
         self.db_act = 0.0
 
         self.reg_mutex = threading.Lock()
@@ -254,6 +255,10 @@ class Up2k(object):
         with self.reload_mutex:
             if self.reload_flag < n:
                 self.reload_flag = n
+            if not self.have_e2d and not self.reloading:
+                self.reloading = True
+                Daemon(self._reload_thr)
+                return
         with self.rescan_cond:
             self.rescan_cond.notify_all()
 
@@ -291,7 +296,7 @@ class Up2k(object):
 
     def deferred_init(self) -> None:
         all_vols = self.asrv.vfs.all_vols
-        have_e2d = self.init_indexes(all_vols, [], False)
+        self.init_indexes(all_vols, [], False)
 
         if self.stop:
             # up-mt consistency not guaranteed if init is interrupted;
@@ -309,7 +314,7 @@ class Up2k(object):
             return
 
         Daemon(self._snapshot, "up2k-snapshot")
-        if have_e2d:
+        if self.have_e2d:
             Daemon(self._hasher, "up2k-hasher")
             Daemon(self._sched_rescan, "up2k-rescan")
             if self.mtag:
@@ -882,17 +887,14 @@ class Up2k(object):
 
     def _expr_idx_filter(self, flags: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         if not self.no_expr_idx:
-            return False, flags
+            return False, dict(flags)
 
         ret = {k: v for k, v in flags.items() if not k.startswith("e2t")}
-        if len(ret) == len(flags):
-            return False, flags
-
-        return True, ret
+        return len(ret) != len(flags), flags
 
     def init_indexes(
         self, all_vols: dict[str, VFS], scan_vols: list[str], fscan: bool, gid: int = 0
-    ) -> bool:
+    ) -> None:
         if not gid:
             with self.mutex:
                 gid = self.gid
@@ -907,7 +909,7 @@ class Up2k(object):
 
             with self.mutex:
                 if gid != self.gid:
-                    return False
+                    return
 
                 if self.pp:
                     continue
@@ -946,6 +948,9 @@ class Up2k(object):
         with self.mutex, self.reg_mutex:
             # only need to protect register_vpath but all in one go feels right
             for vol in vols:
+                if vol.realpath:
+                    self.flags[vol.realpath] = dict(vol.flags)
+
                 if bos.path.isfile(vol.realpath):
                     self.volstate[vol.vpath] = "online (just-a-file)"
                     t = "NOTE: volume [/%s] is a file, not a folder"
@@ -995,6 +1000,21 @@ class Up2k(object):
             with self.mutex, self.reg_mutex:
                 self._drop_caches()
 
+        def setstate(vol, n):
+            t = ""
+            if n < 1 and "e2v" in vol.flags:
+                t += "+e2v"
+            if n < 2 and vol.flags.get("redup"):
+                t += "+redup"
+            if n < 3 and "e2ts" in vol.flags:
+                t += "+tags"
+
+            if t:
+                t = "online (%s pending)" % (t[1:],)
+            else:
+                t = "online, idle"
+            self.volstate[vol.vpath] = t
+
         for vol in vols:
             if self.stop or gid != self.gid:
                 break
@@ -1011,26 +1031,16 @@ class Up2k(object):
                 if vac:
                     need_vac[vol] = True
 
-            if "e2v" in vol.flags:
-                t = "online (integrity-check pending)"
-            elif "e2ts" in vol.flags:
-                t = "online (tags pending)"
-            else:
-                t = "online, idle"
-
-            self.volstate[vol.vpath] = t
+            setstate(vol, 0)
 
         self._unblock()
 
         # file contents verification
         for vol in vols:
-            if self.stop:
-                break
-
-            if "e2v" not in vol.flags:
+            if self.stop or "e2v" not in vol.flags:
                 continue
 
-            t = "online (verifying integrity)"
+            t = "online (doing e2v)"
             self.volstate[vol.vpath] = t
             self.log("{} [{}]".format(t, vol.realpath))
 
@@ -1039,12 +1049,23 @@ class Up2k(object):
                 self.log("modified {} entries in the db".format(nmod), 3)
                 need_vac[vol] = True
 
-            if "e2ts" in vol.flags:
-                t = "online (tags pending)"
-            else:
-                t = "online, idle"
+            setstate(vol, 1)
 
+        # convert dedup type
+        for vol in vols:
+            if self.stop or not vol.flags.get("redup"):
+                continue
+
+            t = "online (doing redup)"
             self.volstate[vol.vpath] = t
+            self.log("{} [{}]".format(t, vol.realpath))
+
+            try:
+                with self.mutex, self.reg_mutex:
+                    self._redup(vol, vols)
+            except:
+                self.log("redup failed: " + min_ex(), 1)
+            setstate(vol, 2)
 
         # open the rest + do any e2ts(a)
         needed_mutagen = False
@@ -1079,7 +1100,7 @@ class Up2k(object):
                 cur.execute("vacuum")
 
         if self.stop:
-            return False
+            return
 
         for vol in all_vols.values():
             if vol.flags["dbd"] == "acid":
@@ -1109,7 +1130,7 @@ class Up2k(object):
                 self.log("checkpoint failed: {}".format(ex), 3)
 
         if self.stop:
-            return False
+            return
 
         self.pp.end = True
 
@@ -1129,7 +1150,7 @@ class Up2k(object):
         else:
             self.unpp()
 
-        return have_e2d
+        self.have_e2d = self.have_e2d or have_e2d
 
     def register_vpath(
         self, ptop: str, flags: dict[str, Any]
@@ -1153,12 +1174,12 @@ class Up2k(object):
                 vpath = k
 
         _, flags = self._expr_idx_filter(flags)
-        n4g = bool(flags.get("noforget"))
+        n4g = "noforget" in flags
 
         ft = "\033[0;32m{}{:.0}"
         ff = "\033[0;35m{}{:.0}"
         fv = "\033[0;36m{}:\033[90m{}"
-        zs = "bcasechk du_iwho emb_all emb_lgs emb_mds ext_th_d html_head html_head_d html_head_s ls_q_m put_name2 mv_re_r mv_re_t rm_re_r rm_re_t oh_f oh_g rw_edit_set srch_re_dots srch_re_nodot zipmax zipmaxn_v zipmaxs_v"
+        zs = "bcasechk du_iwho emb_all emb_lgs emb_mds ext_th_d html_head html_head_d html_head_s ls_q_m put_name2 mv_re_r mv_re_t rm_re_r rm_re_t oh_f oh_g rw_edit_set srch_re_dots srch_re_nodot th_coversd th_coversl th_covers_set th_coversd_set xvd zipmax zipmaxn_v zipmaxs_v"
         fx = set(zs.split())
         fd = vf_bmap()
         fd.update(vf_cmap())
@@ -1292,6 +1313,17 @@ class Up2k(object):
             self.log(t % (vpath, ex), 1)
             return None
 
+        if not (
+            ANYWIN or UNIX or "hist_cow" in flags or "up2k.db" in os.listdir(histpath)
+        ):
+            try:
+                if self.fstab.get(histpath)[0] != "btrfs":
+                    raise Exception()
+                runcmd([b"chattr", b"-c", fsenc(histpath)], 1)  # compression and...
+                runcmd([b"chattr", b"+C", fsenc(histpath)], 1)  # no-cow are incompat
+            except:
+                pass
+
         try:
             cur = self._open_db_wd(db_path)
 
@@ -1375,14 +1407,15 @@ class Up2k(object):
         top = vol.realpath
         rei = vol.flags.get("noidx")
         reh = vol.flags.get("nohash")
-        n4g = bool(vol.flags.get("noforget"))
+        n4g = "noforget" in vol.flags
         ffat = "fat32" in vol.flags
         cst = bos.stat(top)
-        dev = cst.st_dev if vol.flags.get("xdev") else 0
+        dev = cst.st_dev if "xdev" in vol.flags else 0
 
         with self.mutex:
             with self.reg_mutex:
                 reg = self.register_vpath(top, vol.flags)
+                self.flags[vol.realpath] = dict(vol.flags)
 
             assert reg and self.pp  # !rm
             cur, db_path = reg
@@ -1430,12 +1463,14 @@ class Up2k(object):
                     rtop,
                     rei,
                     reh,
+                    vol.flags["th_coversd"],
+                    vol.flags["th_coversd_set"],
                     n4g,
                     ffat,
                     [],
                     cst,
                     dev,
-                    bool(vol.flags.get("xvol")),
+                    "xvol" in vol.flags,
                 )
                 if not n4g:
                     n_rm = self._drop_lost(db.c, top, excl)
@@ -1507,6 +1542,8 @@ class Up2k(object):
         rcdir: str,
         rei: Optional[Pattern[str]],
         reh: Optional[Pattern[str]],
+        th_cvd: list[str],
+        th_cvds: set[str],
         n4g: bool,
         ffat: bool,
         seen: list[str],
@@ -1532,8 +1569,6 @@ class Up2k(object):
         cv = vcv = acv = ""
         e_d = {}
 
-        th_cvd = self.args.th_coversd
-        th_cvds = self.args.th_coversd_set
         scan_pr_s = self.args.scan_pr_s
 
         assert self.pp and self.mem_cur  # !rm
@@ -1600,6 +1635,8 @@ class Up2k(object):
                         rap,
                         rei,
                         reh,
+                        th_cvd,
+                        th_cvds,
                         n4g,
                         fat32,
                         seen,
@@ -1630,7 +1667,7 @@ class Up2k(object):
 
                 rsz += sz
                 files.append((sz, lmod, iname))
-                if sz:
+                if sz and th_cvd:
                     liname = iname.lower()
                     ext = liname.rsplit(".", 1)[-1]
                     if (
@@ -2070,6 +2107,138 @@ class Up2k(object):
             cur.connection.commit()
 
         return len(rewark) + len(f404)
+
+    def _redup(self, vol: VFS, vols: list[VFS]) -> None:
+        logmsg = "redup: replacing %r with %r"
+        dry = "redup_dry" in vol.flags
+        if dry:
+            logmsg += " #dry"
+
+        zs, to = vol.flags["redup"].split("=")
+        zsl = zs.split(",")
+        cref = "no" in zsl or "ref" in zsl
+        csym = "sym" in zsl
+        chard = "hard" in zsl
+        chard0 = chard
+
+        vf = vol.flags.copy()
+        vf["dedup"] = 1
+        for zs in "hardlink hardlinkonly reflink".split():
+            vf.pop(zs, None)
+
+        if to == "ref":
+            vf["reflink"] = 1
+        elif to == "hard":
+            vf["hardlinkonly"] = vf["hardlink"] = 1
+        elif to == "sym":
+            pass
+        else:
+            raise Exception("target type not implemented: " + to)
+
+        if (csym or chard) and to != "sym":
+            self.log("redup: stage 1 begin")
+            if to == "hard":
+                chard = False
+            for x in vol.walk("", "", [], LEELOO_DALLAS, [[]], 2, True, True, True):
+                vn, _, _, atop, lsf, lsd, lsv = x
+                if vn is not vol:
+                    lsd[:] = []
+                    lsv.clear()
+                    continue
+                for fn, st in lsf:
+                    if (csym and stat.S_ISLNK(st.st_mode)) or (
+                        chard and st.st_nlink > 1
+                    ):
+                        ap = os.path.join(atop, fn)
+                        self.log(logmsg % (ap, absreal(ap)))
+                        if dry:
+                            continue
+                        ap2 = tempfile.NamedTemporaryFile(
+                            prefix="r,", dir=atop, delete=False
+                        ).name
+                        self._symlink(ap, ap2, vf, True, True, st.st_mtime)
+                        st1 = bos.stat(ap)
+                        st2 = bos.lstat(ap2)
+                        if st1.st_size != st2.st_size or stat.S_ISLNK(st2.st_mode):
+                            wunlink(self.log, ap2, vf)
+                            raise Exception("redup: clone failed; giving up")
+                        wunlink(self.log, ap, vf)
+                        bos.rename(ap2, ap)
+
+        if cref or to == "sym":
+            self.log("redup: stage 2 begin")
+            if "e2ds" not in vol.flags:
+                self.log(REDUP_E2 % (vol.vpath,), 3)
+            cur = self.cur[vol.realpath]
+            curs = [(vol, cur.connection.cursor())]
+            if to != "sym":
+                for v2 in vols:
+                    if vol is not v2 and v2.realpath in self.cur:
+                        curs += [(v2, self.cur[v2.realpath])]
+            nrem = cur.execute("select count(w) from up").fetchone()[0]
+            self.log("redup [/%s]: %d files left" % (vol.vpath, nrem))
+            q2 = "select rd, fn from up where substr(w,1,16) = ? and w=?"
+            for w, rd, fn in cur.execute("select w, rd, fn from up"):
+                w16 = w[:16]
+                for v2, c2 in curs:
+                    hits = c2.execute(q2, (w16, w)).fetchall()
+                    if not hits:
+                        continue
+                    rd2, fn2 = hits[0]
+                    if fn == fn2 and rd == rd2 and vol is v2:
+                        continue
+                    apt = ""
+                    try:
+                        rd, fn = s3dec(rd, fn)
+                        rd2, fn2 = s3dec(rd2, fn2)
+                        fp1 = os.path.join(vol.realpath, rd, fn)
+                        fp2 = os.path.join(v2.realpath, rd2, fn2)
+                        st1 = bos.lstat(fp1)
+                        if fp1 == fp2 or stat.S_ISLNK(st1.st_mode):
+                            continue  # self(?), or redup failed during walk
+                        if to == "hard" and st1.st_nlink >= len(hits):
+                            continue
+                        ap1 = absreal(fp1)
+                        ap2 = absreal(fp2)
+                        st2 = bos.lstat(ap2)
+                        if stat.S_ISLNK(st2.st_mode):
+                            continue  # dead hit
+                        if to == "ref" and ap1 != ap2:
+                            try:
+                                frag1 = filefrag(ap1)
+                                if frag1:
+                                    frag2 = filefrag(ap2)
+                                    if frag1 == frag2:
+                                        continue
+                            except Exception as ex:
+                                self.log("redup: filefrag failed (OK); %r" % (ex,))
+                        for ap in (ap1,) if ap1 == ap2 else (ap1, ap2):
+                            self.log("redup: integrity-checking %r" % (ap,))
+                            zsl, st = self._hashlist_from_file(ap)
+                            w2 = up2k_wark_from_hashlist(self.salt, st.st_size, zsl)
+                            if w2 != w:
+                                t = "db desync:\n%s %r\n%s db"
+                                raise Exception(t % (w2, ap, w))
+
+                        self.log(logmsg % (ap1, ap2))
+                        if dry:
+                            continue
+                        apt = tempfile.NamedTemporaryFile(
+                            prefix="r,", dir=os.path.dirname(fp1), delete=False
+                        ).name
+                        self._symlink(ap2, apt, vf, True, True, st1.st_mtime)
+                        zsl, st = self._hashlist_from_file(apt)
+                        w2 = up2k_wark_from_hashlist(self.salt, st.st_size, zsl)
+                        if w != w2:
+                            raise Exception("bad checksum after copy?!")
+                        wunlink(self.log, ap1, vf)
+                        bos.rename(apt, ap1)
+                        break
+                    except Exception as ex:
+                        self.log("redup: skipping match due to " + str(ex))
+                        if apt and os.path.exists(apt):
+                            os.unlink(apt)
+                        continue
 
     def _build_tags_index(self, vol: VFS) -> tuple[int, int, bool]:
         ptop = vol.realpath
@@ -2730,6 +2899,17 @@ class Up2k(object):
             t = "-" * 72
             raise Exception("%s\n%s\n%s" % (t, txt, t))
 
+    def _sql_ok(self, cur: "sqlite3.Cursor", q: str) -> bool:
+        try:
+            cur.execute(q).fetchone()
+            return True
+        except Exception as ex:
+            if "no such table" not in str(ex):
+                t = "WARNING: database issues, maybe due to server filesystem or hardware (check %sOS-logs):\n  %r -- \033[31m%r\n"
+                t2 = "" if ANYWIN or UNIX else "dmesg / "
+                self.log(t % (t2, q, ex), 3)
+        return False
+
     def _orz(self, db_path: str) -> "sqlite3.Cursor":
         assert sqlite3  # type: ignore  # !rm
         c = sqlite3.connect(
@@ -2903,11 +3083,8 @@ class Up2k(object):
 
     def _add_dhash_tab(self, cur: "sqlite3.Cursor") -> None:
         # v5 -> v5a
-        try:
-            cur.execute("select d, h from dh limit 1").fetchone()
+        if self._sql_ok(cur, "select d, h from dh limit 1"):
             return
-        except:
-            pass
 
         for cmd in [
             r"create table dh (d text, h text)",
@@ -2921,11 +3098,8 @@ class Up2k(object):
     def _add_xiu_tab(self, cur: "sqlite3.Cursor") -> None:
         # v5a -> v5b
         # store rd+fn rather than warks to support nohash vols
-        try:
-            cur.execute("select c, w, rd, fn from iu limit 1").fetchone()
+        if self._sql_ok(cur, "select c, w, rd, fn from iu limit 1"):
             return
-        except:
-            pass
 
         try:
             cur.execute("drop table iu")
@@ -2943,11 +3117,8 @@ class Up2k(object):
 
     def _add_cv_tab(self, cur: "sqlite3.Cursor") -> None:
         # v5b -> v5c
-        try:
-            cur.execute("select rd, dn, fn from cv limit 1").fetchone()
+        if self._sql_ok(cur, "select rd, dn, fn from cv limit 1"):
             return
-        except:
-            pass
 
         for cmd in [
             r"create table cv (rd text, dn text, fn text)",
@@ -2982,11 +3153,8 @@ class Up2k(object):
 
     def _add_ds_tab(self, cur: "sqlite3.Cursor") -> None:
         # v5d -> v5e
-        try:
-            cur.execute("select rd, sz from ds limit 1").fetchone()
+        if self._sql_ok(cur, "select rd, sz from ds limit 1"):
             return
-        except:
-            pass
 
         for cmd in [
             r"create table ds (rd text, sz int, nf int)",
@@ -3037,7 +3205,7 @@ class Up2k(object):
             raise Pebkac(500, "too many xbu relocs, giving up")
 
         ptop = cj["ptop"]
-        if not self.register_vpath(ptop, cj["vcfg"]):
+        if not self.register_vpath(ptop, cj.pop("vcfg")):
             if ptop not in self.registry:
                 raise Pebkac(410, "location unavailable")
 
@@ -3059,17 +3227,20 @@ class Up2k(object):
             jcur = self.cur.get(ptop)
             reg = self.registry[ptop]
             vfs = self.vfs.all_vols[cj["vtop"]]
-            n4g = bool(vfs.flags.get("noforget"))
-            noclone = bool(vfs.flags.get("noclone"))
-            rand = vfs.flags.get("rand") or cj.get("rand")
+            n4g = "noforget" in vfs.flags
+            noclone = "noclone" in vfs.flags
+            rand = "rand" in vfs.flags or cj.get("rand")
             lost: list[tuple["sqlite3.Cursor", str, str]] = []
 
             safe_dedup = vfs.flags.get("safededup") or 50
             data_ok = safe_dedup < 10 or n4g
 
             vols = [(ptop, jcur)] if jcur else []
-            if vfs.flags.get("xlink"):
+            if vols and ("xlink" in vfs.flags or "reflink" in vfs.flags):
                 vols += [(k, v) for k, v in self.cur.items() if k != ptop]
+                if "xlink" not in vfs.flags:
+                    zs = self.fstab.get(ptop)[1]
+                    vols = [x for x in vols if self.fstab.get(x[0])[1] == zs]
 
             if noclone:
                 wark = up2k_wark_from_metadata(
@@ -3077,7 +3248,7 @@ class Up2k(object):
                 )
 
             zi = cj["lmod"]
-            bad_mt = zi <= 0 or zi > 0xAAAAAAAA
+            bad_mt = zi <= 0 or zi > (2 << 36)
             if bad_mt or vfs.flags.get("up_ts", "") == "fu":
                 # force upload time rather than last-modified
                 cj["lmod"] = int(time.time())
@@ -3190,7 +3361,7 @@ class Up2k(object):
                 c2 = None
                 for cur, dp_dir, dp_fn in lost:
                     t = "forgetting desynced db entry: %r"
-                    self.log(t % ("/" + vjoin(vjoin(vfs.vpath, dp_dir), dp_fn)))
+                    self.log(t % ("/" + vjoins(vfs.vpath, dp_dir, dp_fn)))
                     self.db_rm(cur, vfs.flags, dp_dir, dp_fn, cj["size"])
                     if c2 and c2 != cur:
                         c2.connection.commit()
@@ -3280,7 +3451,10 @@ class Up2k(object):
                         vfs.lim.nup(cj["addr"])
                         vfs.lim.bup(cj["addr"], cj["size"])
 
-                    if "done" not in job:
+                    if "rvp0" in job and wark in reg:
+                        # xbu reloc; accept wrong path
+                        job["addr"] = cj["addr"]
+                    elif "done" not in job:
                         self.log("unfinished:\n  %r\n  %r" % (src, dst))
                         err = "partial upload exists at a different location; please resume uploading here instead:\n"
                         err += "/" + quotep(vsrc) + " "
@@ -3370,18 +3544,29 @@ class Up2k(object):
                                 x = pathmod(self.vfs, dst, vp, hr["reloc"])
                                 if x:
                                     ud1 = (vfs.vpath, job["prel"], job["name"])
+                                    job["rvp0"] = vjoins(*ud1)
                                     pdir, _, job["name"], (vfs, rem) = x
                                     dst = os.path.join(pdir, job["name"])
-                                    job["vcfg"] = vfs.flags
                                     job["ptop"] = vfs.realpath
                                     job["vtop"] = vfs.vpath
                                     job["prel"] = rem
-                                    job["name"] = sanitize_fn(job["name"])
+                                    job["name"] = vfs.sanitize_fn(job["name"], rem)
                                     ud2 = (vfs.vpath, job["prel"], job["name"])
                                     if ud1 != ud2:
                                         # print(json.dumps(job, sort_keys=True, indent=4))
+                                        job["vcfg"] = vfs.flags
                                         job["hash"] = cj["hash"]
-                                        self.log("xbu reloc1:%d..." % (depth,), 6)
+                                        t = "xbu reloc1=%d ptop=%r vtop=%r prel=%r name=%r"
+                                        t = t % (
+                                            depth,
+                                            job["ptop"],
+                                            job["vtop"],
+                                            job["prel"],
+                                            job["name"],
+                                        )
+                                        self.log(t, 6)
+                                        zs = djoin(job["ptop"], job["prel"])
+                                        bos.makedirs(zs, vf=vfs.flags)
                                         return self._handle_json(job, depth + 1)
 
                         job["name"] = self._untaken(pdir, job, now)
@@ -3545,7 +3730,7 @@ class Up2k(object):
             st = bos.stat(fp)
             try:
                 vrel = vjoin(job["prel"], fname)
-                xlink = bool(vf.get("xlink"))
+                xlink = "xlink" in vf
                 cur, wark, _, _, _, _, _ = self._find_from_vpath(ptop, vrel)
                 self._forget_file(ptop, vrel, vf, cur, wark, True, st.st_size, xlink)
             except Exception as ex:
@@ -3600,7 +3785,7 @@ class Up2k(object):
             if rm and bos.path.exists(dst):
                 wunlink(self.log, dst, flags)
 
-            if not is_mv and not flags.get("dedup"):
+            if not is_mv and "dedup" not in flags:
                 raise Exception("dedup is disabled in config")
 
             if "reflink" in flags:
@@ -4103,31 +4288,7 @@ class Up2k(object):
                 with self.rescan_cond:
                     self.rescan_cond.notify_all()
 
-        if rd and sz and fn.lower() in self.args.th_coversd_set:
-            # wasteful; db_add will re-index actual covers
-            # but that won't catch existing files
-            crd, cdn = rd.rsplit("/", 1) if "/" in rd else ("", rd)
-            try:
-                q = "select fn from cv where rd=? and dn=?"
-                db_cv = db.execute(q, (crd, cdn)).fetchone()[0]
-                db_lcv = db_cv.lower()
-                if db_lcv in self.args.th_coversd_set:
-                    idx_db = self.args.th_coversd.index(db_lcv)
-                    idx_fn = self.args.th_coversd.index(fn.lower())
-                    add_cv = idx_fn < idx_db
-                else:
-                    add_cv = True
-            except:
-                add_cv = True
-
-            if add_cv:
-                try:
-                    db.execute("delete from cv where rd=? and dn=?", (crd, cdn))
-                    db.execute("insert into cv values (?,?,?)", (crd, cdn, fn))
-                except:
-                    pass
-
-        if "nodirsz" not in vflags:
+        if vflags and "nodirsz" not in vflags:
             try:
                 q = "update ds set nf=nf+1, sz=sz+? where rd=?"
                 q2 = "insert into ds values(?,?,1)"
@@ -4141,6 +4302,9 @@ class Up2k(object):
                 pass
 
     def handle_fs_abrt(self, akey: str) -> None:
+        if akey == "ping":
+            with self.mutex, self.reg_mutex:
+                return
         self.abrt_key = akey
 
     def handle_rm(
@@ -4245,7 +4409,7 @@ class Up2k(object):
             is_dir = stat.S_ISDIR(st.st_mode)
         except:
             # NOTE: "file not found" *sftpd
-            raise Pebkac(400, "file not found on disk (already deleted?)")
+            raise Pebkac(404, "file not found on disk (already deleted?)")
 
         if "bcasechk" in vn.flags and not vn.casechk(rem, False):
             raise Pebkac(400, "file does not exist case-sensitively")
@@ -4322,7 +4486,7 @@ class Up2k(object):
                     cur = None
                     try:
                         ptop = dbv.realpath
-                        xlink = bool(dbv.flags.get("xlink"))
+                        xlink = "xlink" in dbv.flags
                         cur, wark, _, _, _, _, _ = self._find_from_vpath(ptop, volpath)
                         self._forget_file(
                             ptop, volpath, dbv.flags, cur, wark, True, st.st_size, xlink
@@ -4526,6 +4690,12 @@ class Up2k(object):
             self.log("not found in src db: %r" % (svp,))
 
         try:
+            if svn_dbv != dvn and not (
+                "xlink" in dvn.flags
+                or "reflink" in dvn.flags
+                or "hardlinkonly" in dvn.flags
+            ):
+                raise OSError(errno.EXDEV, "different volumes")
             if is_link and st != stl:
                 # relink non-broken symlinks to still work after the move,
                 # but only resolve 1st level to maintain relativity
@@ -4740,7 +4910,7 @@ class Up2k(object):
                 fsize,
                 ip,
                 time.time(),
-                None,
+                [dabs],
             )
             t = hr.get("rejectmsg") or ""
             if t or hr.get("rc") != 0:
@@ -4783,7 +4953,7 @@ class Up2k(object):
                     fsize,
                     ip,
                     time.time(),
-                    None,
+                    [sabs],
                 )
 
             return "k"
@@ -4803,7 +4973,7 @@ class Up2k(object):
                             raise Pebkac(400, t)
                 self._copy_tags(c1, c2, w)
 
-            xlink = bool(svn.flags.get("xlink"))
+            xlink = "xlink" in svn.flags
 
             with self.reg_mutex:
                 has_dupes = self._forget_file(
@@ -4913,7 +5083,7 @@ class Up2k(object):
                 fsize,
                 ip,
                 time.time(),
-                None,
+                [sabs],
             )
 
         return "k"
@@ -5217,7 +5387,7 @@ class Up2k(object):
         if eno not in E_FS_CRIT:
             return self.log("hashing failed; %r @ %r\n%s" % (ex, ap, min_ex()), 3)
         t = "hashing failed; %r @ %r\n%s\nWARNING: This MAY indicate a serious issue with your harddisk or filesystem! Please investigate %sOS-logs\n"
-        t2 = "" if ANYWIN or MACOS else "dmesg and "
+        t2 = "" if ANYWIN or UNIX else "dmesg and "
         return self.log(t % (ex, ap, min_ex(), t2), 1)
 
     def _new_upload(self, job: dict[str, Any], vfs: VFS, depth: int) -> dict[str, str]:
@@ -5263,15 +5433,25 @@ class Up2k(object):
                 x = pathmod(self.vfs, ap_chk, vp_chk, hr["reloc"])
                 if x:
                     ud1 = (vfs.vpath, job["prel"], job["name"])
+                    job["rvp0"] = vjoins(*ud1)
                     pdir, _, job["name"], (vfs, rem) = x
-                    job["vcfg"] = vf = vfs.flags
+                    vf = vfs.flags
                     job["ptop"] = vfs.realpath
                     job["vtop"] = vfs.vpath
                     job["prel"] = rem
-                    job["name"] = sanitize_fn(job["name"])
+                    job["name"] = vfs.sanitize_fn(job["name"], rem)
                     ud2 = (vfs.vpath, job["prel"], job["name"])
                     if ud1 != ud2:
-                        self.log("xbu reloc2:%d..." % (depth,), 6)
+                        job["vcfg"] = vf
+                        t = "xbu reloc2=%d ptop=%r vtop=%r prel=%r name=%r" % (
+                            depth,
+                            job["ptop"],
+                            job["vtop"],
+                            job["prel"],
+                            job["name"],
+                        )
+                        self.log(t, 6)
+                        bos.makedirs(djoin(job["ptop"], job["prel"]), vf=vf)
                         return self._handle_json(job, depth + 1)
 
         job["name"] = self._untaken(pdir, job, job["t0"])
@@ -5311,9 +5491,12 @@ class Up2k(object):
                 and self.args.sparse * 1024 * 1024 <= sz
             ):
                 try:
-                    sp.check_call(["fsutil", "sparse", "setflag", abspath])
-                except:
-                    self.log("could not sparse %r" % (abspath,), 3)
+                    winsparse(f)
+                    # some kernels/etc are buggy; force sync:
+                    f.close()
+                    f = open(abspath, "rb+")
+                except Exception as ex:
+                    self.log("could not sparse %r: %s" % (abspath, ex), 3)
                     relabel = True
                     sprs = False
 
@@ -5700,7 +5883,7 @@ def up2k_chunksize(filesize: int) -> int:
     stepsize = 512 * 1024
     while True:
         for mul in [1, 2]:
-            nchunks = math.ceil(filesize * 1.0 / chunksize)
+            nchunks = -int(-filesize // chunksize)
             if nchunks <= 256 or (chunksize >= 32 * 1024 * 1024 and nchunks <= 4096):
                 return chunksize
 

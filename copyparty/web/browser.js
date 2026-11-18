@@ -46,6 +46,7 @@ if (1)
 				["ctrl-V", "paste (move/copy) here"],
 				["Y", "download selected"],
 				["F2", "rename selected"],
+				["F4", "update/refresh"],
 
 				"file-list-sel",
 				["space", "toggle file selection"],
@@ -579,9 +580,10 @@ if (1)
 		"u_https1": "you should",
 		"u_https2": "switch to https",
 		"u_https3": "for better performance",
-		"u_ancient": 'your browser is impressively ancient -- maybe you should <a href="#" onclick="goto(\'bup\')">use bup instead</a>',
+		"u_ancient": 'your browser is impressively ancient -- maybe you should <a href="#" id="u2nah">use bup instead</a>',
 		"u_nowork": "need firefox 53+ or chrome 57+ or iOS 11+",
 		"tail_2old": "need firefox 105+ or chrome 71+ or iOS 14.5+",
+		"b2old": 'your browser is too old',
 		"u_nodrop": 'your browser is too old for drag-and-drop uploading',
 		"u_notdir": "that's not a folder!\n\nyour browser is too old,\nplease try dragdrop instead",
 		"u_uri": "to dragdrop images from other browser windows,\nplease drop it onto the big upload button",
@@ -665,6 +667,7 @@ if (1)
 		"rc_pla": "play as audio",
 		"rc_txt": "open in textfile viewer",
 		"rc_md": "open in markdown viewer",
+		"rc_wopi": "open in office editor",
 		"rc_dl": "download",
 		"rc_zip": "download as archive",
 		"rc_cpl": "copy link",
@@ -757,7 +760,7 @@ if (window.glang && navigator.languages && !/\bcplng=/.test(document.cookie))
 				if (window.stop)
 					window.stop();
 				document.body.innerHTML = 'Loading ' + n;
-				setck("cplng=" + n, location.reload.bind(location));
+				setck("cplng=" + n, relod);
 				crashed = true;
 				throw 1;
 			}
@@ -865,7 +868,7 @@ ebi('widget').innerHTML = (
 
 // up2k ui
 ebi('op_up2k').innerHTML = (
-	'<form id="u2form" method="post" enctype="multipart/form-data" onsubmit="return false;"></form>\n' +
+	'<form id="u2form" method="post" enctype="multipart/form-data"></form>\n' +
 
 	'<table id="u2conf">\n' +
 	'	<tr>\n' +
@@ -944,6 +947,9 @@ ebi('op_up2k').innerHTML = (
 	'<div id="u2life"></div>' +
 	'<div id="u2foot"></div>'
 );
+ebi('u2form').onsubmit = function () {
+	return false;
+};
 
 
 ebi('wrap').insertBefore(mknod('div', 'lazy'), ebi('epi'));
@@ -1108,6 +1114,7 @@ ebi('rcm').innerHTML = (
 	'<a href="#" id="rpla">' + L.rc_pla + '</a>' +
 	'<a href="#" id="rtxt">' + L.rc_txt + '</a>' +
 	'<a href="#" id="rmd">' + L.rc_md + '</a>' +
+	'<a href="#" id="rwopi">' + L.rc_wopi + '</a>' +
 	'<div id="rs1" class="sep"></div>' +
 	'<a href="#" id="rcpl">' + L.rc_cpl + '</a>' +
 	'<a href="#" id="rdl">' + L.rc_dl + '</a>' +
@@ -1198,6 +1205,8 @@ function goto(dest) {
 	if (treectl)
 		treectl.onscroll();
 }
+function go2bup() { goto('bup'); }
+function go2up2k() { goto('up2k'); }
 
 
 var m = SPINNER.split(','),
@@ -1240,8 +1249,11 @@ check_image_support('jxl', "data:image/jxl;base64,/woIAAAMABKIAgC4AF3lEgA=");
 
 
 var img_re = APPLE ?
-	/\.(a?png|avif|bmp|gif|hei[cf]s?|jpe?g|jfif|svg|webp|webm|mkv|mp4|m4v|mov)(\?|$)/i :
-	/\.(a?png|avif|bmp|gif|jpe?g|jfif|svg|webp|webm|mkv|mp4|m4v|mov)(\?|$)/i;
+	/\.(a?png|avif|bmp|gif|hei[cf]s?|jpe?g|jfif|jxl|svg|webp|webm|mkv|mp4|m4v|mov)(\?|$)/i :
+	/\.(a?png|avif|bmp|gif|jpe?g|jfif|jxl|svg|webp|webm|mkv|mp4|m4v|mov)(\?|$)/i;
+
+var wopi_set = !window.have_wopi ? null :
+	new Set('odt fodt ott doc docx dotx rtf odm ods fods ots xls xlsx odp fodp otp ppt pptx ppsx odg fodg otg odf'.split(' '));
 
 
 function set_files_html(html) {
@@ -1701,7 +1713,7 @@ mpl.init_ac2();
 var re_m3u = /\.(m3u8?)$/i;
 var re_au_native = (can_ogg || have_acode) ? /\.(aac|flac|m4[abr]|mp3|oga|ogg|opus|wav)$/i : /\.(aac|flac|m4[abr]|mp3|wav)$/i,
 	re_au_vid = /\.(3gp|asf|avi|flv|m4v|mkv|mov|mp4|mpeg|mpeg2|mpegts|mpg|mpg2|nut|ogm|ogv|rm|ts|vob|webm|wmv)$/i,
-	re_au_all = /\.(aac|ac3|aif|aiff|alac|alaw|amr|ape|au|b[cfr]stm|dfpwm|dts|flac|gsm|it|itgz|itxz|itz|m4[abr]|mdgz|mdxz|mdz|mo3|mod|mp2|mp3|mpc|mptm|mt2|mulaw|oga|ogg|okt|opus|ra|s3m|s3gz|s3xz|s3z|tak|tta|ulaw|wav|wma|wv|xm|xmgz|xmxz|xmz|xpk|3gp|asf|avi|flv|m4v|mkv|mov|mp4|mpeg|mpeg2|mpegts|mpg|mpg2|nut|ogm|ogv|rm|ts|vob|webm|wmv)$/i;
+	re_au_all = /\.(aac|ac3|aif|aiff|alac|alaw|amr|ape|au|b[cfr]stm|dfpwm|dts|flac|gsm|it|itgz|itxz|itz|m4[abr]|mdgz|mdxz|mdz|mka|mo3|mod|mp2|mp3|mpc|mptm|mt2|mulaw|oga|ogg|okt|opus|ra|s3m|s3gz|s3xz|s3z|tak|tta|ulaw|wav|wma|wv|xm|xmgz|xmxz|xmz|xpk|3gp|asf|avi|flv|m4v|mkv|mov|mp4|mpeg|mpeg2|mpegts|mpg|mpg2|nut|ogm|ogv|rm|ts|vob|webm|wmv)$/i;
 
 
 // extract songs + add play column
@@ -1783,7 +1795,7 @@ function MPlayer() {
 				continue;
 
 			tid = tid.slice(1);
-			if (r.tracks[tid]) 
+			if (r.tracks[tid])
 				order.push(tid);
 		}
 		r.order = order;
@@ -3547,7 +3559,7 @@ function eval_hash() {
 	if (hash0 && window.og_fn) {
 		var all = msel.getall(), mi;
 		for (var a = 0; a < all.length; a++)
-			if (og_fn == uricom_dec(vsplit(all[a].vp)[1].split('?')[0])) {
+			if (og_fn == all[a].fn) {
 				mi = all[a];
 				break;
 			}
@@ -3760,7 +3772,7 @@ function sortfiles(nodes) {
 					if ((v + '').indexOf('<a ') === 0)
 						v = v.split('>')[1];
 					else if (name == "href" && v)
-						v = uricom_dec(v);
+						v = uri2txt(v, true);
 
 					nodes[b]._sv = v
 				}
@@ -4053,6 +4065,11 @@ var fileman = (function () {
 		}
 		shui.style.display = 'block';
 
+		var wr = has(perms, 'write') && !fns.length;
+		var nope = ['admin', 'move', 'delete', 'upget'];
+		if (!wr)
+			nope.push('write');
+
 		var html = [
 			'<div>',
 			'<table>',
@@ -4073,13 +4090,13 @@ var fileman = (function () {
 			'<tr><td>perms</td><td class="sh_axs">',
 		];
 		for (var a = 0; a < perms.length; a++)
-			if (!has(['admin', 'move', 'delete'], perms[a]))
+			if (!has(nope, perms[a]))
 				html.push('<a href="#" class="tgl btn">' + perms[a] + '</a>');
 
-		if (has(perms, 'write'))
+		if (wr)
 			html.push('<a href="#" class="btn">write-only</a>');
 
-		html.push('</td></tr></div');
+		html.push('</td></tr><table></div>');
 		shui.innerHTML = html.join('\n');
 
 		var sh_rand = ebi('sh_rand'),
@@ -4145,6 +4162,8 @@ var fileman = (function () {
 			if (this.textContent == 'write-only')
 				for (var a = 0; a < pbtns.length; a++)
 					clmod(pbtns[a], 'on', pbtns[a].textContent == 'write');
+			if (this.textContent == 'get' && clgot(this, 'on') && has(perms, 'read'))
+				clmod(pbtns[0], 'on');
 		}
 		clmod(pbtns[0], 'on', 1);
 
@@ -4235,9 +4254,6 @@ var fileman = (function () {
 			s2d[a] = all.indexOf(sel[a]);
 
 			var vp = sel[a].vp;
-			if (vp.endsWith('/'))
-				vp = vp.slice(0, -1);
-
 			var vsp = vsplit(vp);
 			if (base != vsp[0])
 				return toast.err(0, esc('bug:\n' + base + '\n' + vsp[0]));
@@ -4531,8 +4547,9 @@ var fileman = (function () {
 			}
 
 			var msg = esc(L.fr_busy.format(f.length, f[0].ofn));
-			msg += '\n<a id="fs_abrt" class="btn" href="#" onclick="fs_abrt()">' + L.fs_abrt + '</a>';
+			msg += '\n<a id="fs_abrt" class="btn" href="#">' + L.fs_abrt + '</a>';
 			toast.show('inf r', 0, msg);
+			ebi('fs_abrt').onclick = fs_abrt;
 			var dst = base + uricom_enc(f[0].inew.value, false);
 
 			function rename_cb() {
@@ -4555,6 +4572,8 @@ var fileman = (function () {
 			xhr.onload = xhr.onerror = rename_cb;
 			xhr.send();
 		}
+
+		ire.oninput();
 	};
 
 	r.delete = function (e) {
@@ -4580,6 +4599,9 @@ var fileman = (function () {
 			if (!vp) {
 				if (err !== 'xbd')
 					toast.ok(2, L.fd_ok);
+
+				if (QS('#seldoc.sel'))
+					thegrid.setvis(true);
 
 				treectl.goto();
 				return;
@@ -4859,8 +4881,9 @@ var fileman = (function () {
 				return paster();
 
 			var msg = esc((r.ccp ? L.fcp_busy : L.fp_busy).format(f.length + 1, uricom_dec(t.src)));
-			msg += '\n<a id="fs_abrt" class="btn" href="#" onclick="fs_abrt()">' + L.fs_abrt + '</a>';
+			msg += '\n<a id="fs_abrt" class="btn" href="#">' + L.fs_abrt + '</a>';
 			toast.show('inf r', 0, msg);
+			ebi('fs_abrt').onclick = fs_abrt;
 
 			var xhr = new XHR(),
 				act = r.ccp ? '?copy=' : '?move=',
@@ -5056,11 +5079,22 @@ var showfile = (function () {
 	r.nmap = {
 		'dockerfile': 'docker'
 	};
+	r.pmap = {
+		'sh': 'bash',
+		'ash': 'bash',
+		'dash': 'bash',
+		'luajit': 'lua',
+		'node': 'js',
+	};
 	var x = txt_ext + ' ans c cfg conf cpp cs css diff glsl go html ini java js json jsx kt kts latex less lisp lua makefile md nasm nim nix py r rss rb ruby sass scss sql svg swift tex toml ts vhdl xml yaml zig';
 	x = x.split(/ +/g);
 	for (var a = 0; a < x.length; a++)
 		if (!r.map["." + x[a]])
 			r.map["." + x[a]] = x[a];
+	x = 'awk bash lua make perl python ruby swift';
+	x = x.split(/ +/g);
+	for (var a = 0; a < x.length; a++)
+		r.pmap[x[a]] = x[a];
 
 	r.sname = function (srch) {
 		return srch.split(/[?&]doc=/)[1].split('&')[0];
@@ -5069,7 +5103,7 @@ var showfile = (function () {
 	if (window.og_fn) {
 		var ext = og_fn.split(/\./g).pop();
 		if (r.map['.' + ext])
-			hist_replace(get_evpath() + '?doc=' + og_fn);
+			hist_replace(get_evpath() + '?doc=' + uricom_enc(og_fn));
 	}
 
 	window.Prism = { 'manual': true };
@@ -5080,7 +5114,7 @@ var showfile = (function () {
 		var m = /[?&]doc=([^&]+)/.exec(location.search);
 		if (m) {
 			setTimeout(function () {
-				r.show(uricom_dec(m[1]), true);
+				r.show(m[1], true);
 			}, 1);
 		}
 	}
@@ -5100,11 +5134,17 @@ var showfile = (function () {
 		return !!/[?&]doc=/.exec(location.search);
 	};
 
-	r.getlang = function (fn) {
+	r.getlang = function (fn, txt) {
 		fn = fn.toLowerCase();
 		var ext = fn.slice(fn.lastIndexOf('.'));
-		return r.map[ext] || r.nmap[fn];
-	}
+		var prog = txt && txt.startsWith('#!') && txt.split('\n')[0].replace(
+			'#!/usr/bin/env', '').replace(
+			'#!/usr/bin/', '').replace(
+			'#!/bin/', '').trim().split(' ')[0];
+		if (prog)
+			prog = r.pmap[prog] || r.pmap[prog.replace(/[0-9].*/, '')];
+		return r.map[ext] || r.nmap[fn] || prog;
+	};
 
 	r.addlinks = function () {
 		r.files = [];
@@ -5117,7 +5157,7 @@ var showfile = (function () {
 			if (!lang)
 				continue;
 
-			r.files.push({ 'id': link.id, 'name': uricom_dec(fn) });
+			r.files.push({ 'id': link.id, 'name': link.fn });
 
 			var ah = ebi(link.id),
 				td = ah.closest('tr').getElementsByTagName('td')[0];
@@ -5253,7 +5293,7 @@ var showfile = (function () {
 			txt = doc[2],
 			name = url.split('?')[0].split('/').pop(),
 			tname = uricom_dec(name),
-			lang = r.getlang(name),
+			lang = r.getlang(name, txt),
 			is_md = lang == 'md';
 
 		ebi('files').style.display = ebi('gfiles').style.display = ebi('lazy').style.display = ebi('pro').style.display = ebi('epi').style.display = 'none';
@@ -5442,7 +5482,7 @@ var showfile = (function () {
 				sel = false;
 
 			for (var b = 0; b < sels.length; b++)
-				if (vsplit(sels[b].vp)[1] == lin)
+				if (sels[b].fn == lin)
 					sel = true;
 
 			clmod(lis[a], 'hl', lin == fn);
@@ -5465,7 +5505,7 @@ var showfile = (function () {
 	r.tgltail = function () {
 		if (!window.TextDecoderStream) {
 			bcfg_set('taildoc', r.taildoc = false);
-			return toast.err(10, L.tail_2old);
+			return toast.err(10, L.b2old + ';\n' + L.tail_2old);
 		}
 		r.show(r.url, true);
 	};
@@ -5676,8 +5716,8 @@ var thegrid = (function () {
 			fid = oth.getAttribute('id'),
 			aplay = ebi('a' + fid),
 			atext = ebi('t' + fid),
-			is_txt = atext && !/\.ts$/.test(href) && showfile.getlang(href),
 			is_img = img_re.test(href),
+			is_txt = atext && !is_img && !/\.ts$/.test(href) && showfile.getlang(href),
 			is_dir = href.endsWith('/'),
 			is_srch = !!ebi('unsearch'),
 			in_tree = is_dir && treectl.find(oth.textContent.slice(0, -1)),
@@ -5883,10 +5923,15 @@ var thegrid = (function () {
 
 			html.push('<a href="' + ohref + '" ref="' + ref +
 				'"' + ac + ' ttt="' + esc(name) + '"><img style="height:' +
-				(r.sz / 1.25) + 'em" loading="lazy" onload="th_onload(this)" src="' +
+				(r.sz / 1.25) + 'em" loading="lazy" fetchPriority="low" src="' +
 				ihref + '" /><span' + ac + '>' + ao.innerHTML + '</span></a>');
 		}
 		ggrid.innerHTML = html.join('\n');
+
+		var ths = QSA('#ggrid>a>img');
+		for (var a = 0, aa = ths.length; a < aa; a++)
+			ths[a].onload = th_onload;
+
 		clmod(ggrid, 'crop', r.crop);
 		clmod(ggrid, 'nocrop', !r.crop);
 
@@ -5897,7 +5942,7 @@ var thegrid = (function () {
 		if (srch && r.sel)
 			gsel.click();
 
-		var ths = QSA('#ggrid>a');
+		ths = QSA('#ggrid>a');
 		for (var a = 0, aa = ths.length; a < aa; a++) {
 			ths[a].ondblclick = gclick2;
 			ths[a].onclick = gclick1;
@@ -5932,7 +5977,11 @@ var thegrid = (function () {
 			},
 			onChange: function (i, maxIdx) {
 				if (this[i].imageElement) {
-					sethash('g' + this[i].imageElement.getAttribute('ref') + getsort());
+					var h = 'g' + this[i].imageElement.getAttribute('ref');
+					if (this[i].page)
+						h += ',p' + this[i].page;
+					h += getsort();
+					sethash(h);
 				}
 			}
 		});
@@ -6038,8 +6087,8 @@ var thegrid = (function () {
 })();
 
 
-function th_onload(el) {
-	el.style.height = '';
+function th_onload() {
+	this.style.height = '';
 }
 
 
@@ -6411,6 +6460,11 @@ var ahotkeys = function (e) {
 
 	if (k == 'F2')
 		return fileman.rename();
+
+	if (k == 'F4') {
+		enspin('t', 1);
+		return treectl.goto();
+	}
 
 	if (!treectl.hidden && (!sh || !thegrid.en)) {
 		if (kl == 'a')
@@ -7663,6 +7717,11 @@ var treectl = (function () {
 					tn.href = addq(tn.href, 'v');
 			}
 
+
+			if (wopi_set && wopi_set.has(tn.ext))
+				tn.lead = '<a href="?wopi=' + bhref +
+					'" rel="nofollow" target="_blank" name="' + hname + '">📄</a>';
+
 			if (tn.lead == '-')
 				tn.lead = '<a href="?doc=' + bhref + '" id="t' + id +
 					'" rel="nofollow" class="doc' + (lang ? ' bri' : '') +
@@ -7755,6 +7814,7 @@ var treectl = (function () {
 
 	r.hydrate = function () {
 		qsr('#bbsw');
+		qsr('#js_bork');
 		srvinf = ebi('srv_info').innerHTML.slice(6, -7);
 		if (ls0 === null) {
 			r.ls_cb = showfile.addlinks;
@@ -7871,7 +7931,7 @@ var treectl = (function () {
 		delete res['a'];
 		var keys = Object.keys(res);
 		for (var a = 0; a < keys.length; a++)
-			keys[a] = [uricom_dec(keys[a]), keys[a]];
+			keys[a] = [uri2txt(keys[a]), keys[a]];
 
 		if (ENATSORT)
 			keys.sort(function (a, b) { return NATSORT.compare(a[0], b[0]); });
@@ -7959,12 +8019,12 @@ var treectl = (function () {
 })();
 
 
-function enspin(i) {
+function enspin(i, ns) {
 	i = 'dlt_' + i;
 	if (ebi(i))
 		return;
 	var d = mknod('div', i, SPINNER);
-	d.className = 'dumb_loader_thing';
+	d.className = 'dumb_loader_thing' + ( ns? ' ns' : '');
 	if (SPINNER_CSS)
 		d.style.cssText = SPINNER_CSS;
 	document.body.appendChild(d);
@@ -8033,12 +8093,17 @@ function apply_perms(res) {
 	a.style.display = '';
 	tt.att(QS('#ops'));
 
+	var v_perms = perms.slice(0);
+	var have_read = has(perms, 'read');
+	if (have_read)
+		apop(v_perms, 'get');
+
 	for (var a = 0; a < chk.length; a++)
-		if (has(perms, chk[a]))
+		if (has(v_perms, chk[a]))
 			axs.push(chk[a].slice(0, 1).toUpperCase() + chk[a].slice(1));
 
 	axs = axs.join('-');
-	if (perms.length == 1) {
+	if (v_perms.length == 1) {
 		aclass = ' class="warn">';
 		axs += '-Only';
 	}
@@ -8080,7 +8145,6 @@ function apply_perms(res) {
 	document.body.setAttribute('perms', perms.join(' '));
 
 	var have_write = has(perms, "write"),
-		have_read = has(perms, "read"),
 		de = document.documentElement,
 		tds = QSA('#u2conf td');
 
@@ -8586,7 +8650,7 @@ var setfszf = (function () {
 		setck('cplng=' + lang);
 		freshen();
 		var t = L.tt == 'English' ? '' : Ls.eng.lang_set;
-		modal.confirm(L.lang_set + "\n\n" + t, location.reload.bind(location), null);
+		modal.confirm(L.lang_set + "\n\n" + t, relod, null);
 	}
 
 	freshen();
@@ -8723,6 +8787,7 @@ var msel = (function () {
 			item.id = links[a].getAttribute('id');
 			item.sel = clgot(links[a].closest('tr'), 'sel');
 			item.vp = href.indexOf('/') !== -1 ? href : vbase + href;
+			item.fn = uricom_dec(href.split('/').pop());
 
 			if (dk) {
 				var m = /[?&](k=[^&#]+)/.exec(qhref);
@@ -8837,7 +8902,7 @@ var msel = (function () {
 	r.evsel = function (e, fun) {
 		ev(e);
 		r.so = r.pr = null;
-		var trs = QSA('#files tbody tr');
+		var trs = QSA('#files tbody tr' + (ebi('unsearch') ? ':not(.srch_hdr)' : ''));
 		for (var a = 0, aa = trs.length; a < aa; a++)
 			clmod(trs[a], 'sel', fun);
 		r.selui();
@@ -8979,6 +9044,13 @@ var msel = (function () {
 			return;
 		}
 
+		if (this.status == 405) {
+			tb.value = '';
+			sf.textContent = 'already existed';
+			treectl.goto(this.vp + uricom_enc(this.dn) + '/', true);
+			return tree_scrollto();
+		}
+
 		xhrchk(this, L.fd_xe1, L.fd_xe2);
 
 		if (this.status !== 201) {
@@ -9105,7 +9177,7 @@ var sandboxjs = (function () {
 	var ret = '',
 		busy = false,
 		url = SR + '/.cpr/w/util.js?_=' + TS,
-		tag = '<script src="' + url + '"></script>';
+		tag = '<script nonce="' + JS_NONCE + '" src="' + url + '"></script>';
 
 	return function () {
 		if (ret || busy)
@@ -9115,7 +9187,7 @@ var sandboxjs = (function () {
 		xhr.open('GET', url, true);
 		xhr.onload = function () {
 			if (this.status == 200)
-				ret = '<script>' + this.responseText + '</script>';
+				ret = '<script nonce="' + JS_NONCE + '">' + this.responseText + '</script>';
 		};
 		xhr.send();
 		busy = true;
@@ -9137,7 +9209,7 @@ function show_md(md, name, div, url, depth) {
 		if (depth) {
 			clmod(div, 'raw', 1);
 			div.textContent = "--[ " + name + " ]---------\r\n" + md;
-			return toast.warn(10, errmsg + (WebAssembly ? 'failed to load marked.js' : 'your browser is too old'));
+			return toast.warn(10, errmsg + (WebAssembly ? 'failed to load marked.js' : L.b2old));
 		}
 
 		wfp_debounce.n--;
@@ -9263,8 +9335,9 @@ function sandbox(tgt, rules, allow, cls, html) {
 	html = '<html class="iframe ' + document.documentElement.className +
 		'"><head><style>html{background:#eee;color:#000}</style><style>' + globalcss() +
 		'</style><base target="_parent"></head><body id="b" class="logue ' + cls + '">' + html +
-		'<script>' + env + '</script>' + sandboxjs() +
-		'<script>var d=document.documentElement,TS="' + TS + '",' +
+		'<script nonce="' + JS_NONCE + '">' + env + '</script>' + sandboxjs() +
+		'<script nonce="' + JS_NONCE + '">' +
+		'var d=document.documentElement,TS="' + TS + '",' +
 		'loc=new URL("' + location.href.split('?')[0] + '");' +
 		'function say(m){window.parent.postMessage(m,"*")};' +
 		'setTimeout(function(){var its=0,pih=-1,f=function(){' +
@@ -9289,6 +9362,7 @@ function sandbox(tgt, rules, allow, cls, html) {
 	fr.setAttribute('sandbox', rules ? 'allow-' + rules.replace(/ /g, ' allow-') : '');
 	fr.setAttribute('allow', allow);
 	fr.setAttribute('srcdoc', html);
+	tgt.innerHTML = '';
 	tgt.appendChild(fr);
 	treectl.sb_msg = true;
 	return true;
@@ -9784,6 +9858,7 @@ var rcm = (function () {
 				case 'pla': play('f-' + selFile.id); break;
 				case 'txt': showfile.show(selFile.name); break;
 				case 'md': location = selFile.path + (has(selFile.path, '?') ? '&v' : '?v'); break;
+				case 'wopi': window.open('?wopi=' + selFile.name, '_blank').focus(); break;
 				case 'cpl': cliptxt(selFile.url, function() {toast.ok(2, L.clipped)}); break;
 				case 'dl': ebi('seldl').click(); break;
 				case 'zip': ebi('selzip').click(); break;
@@ -9844,13 +9919,20 @@ var rcm = (function () {
 
 		var has_sel = msel.getsel().length;
 		var has_clip = fileman.clip.length;
+		var ext = (function() {
+			if (!selFile.name) return null;
+			var di = selFile.name.lastIndexOf('.');
+			if (di < 1) return null;
+			return selFile.name.slice(di + 1).toLowerCase();
+		})();
 
 		clmod(ebi('ropn'), 'hide', !selFile.path);
 		clmod(ebi('rply'), 'hide', selFile.type != 'gf' && selFile.type != 'af');
 		clmod(ebi('rpla'), 'hide', selFile.type != 'gf');
 		clmod(ebi('rtxt'), 'hide', !selFile.id);
 		clmod(ebi('rs1'), 'hide', !selFile.path);
-		clmod(ebi('rmd'), 'hide', !selFile.name || selFile.name.slice(-3) != ".md");
+		clmod(ebi('rmd'), 'hide', !selFile.name || ext != "md");
+		clmod(ebi('rwopi'), 'hide', !selFile.name || !wopi_set || !wopi_set.has(ext));
 		clmod(ebi('rcpl'), 'hide', !selFile.path);
 		clmod(ebi('rdl'), 'hide', !has_sel);
 		clmod(ebi('rzip'), 'hide', !has_sel);
@@ -9982,19 +10064,19 @@ function reload_browser() {
 	var selbox = null;
 	var ttimer = null;
 
-	var lpdelay = 250; 
+	var lpdelay = 250;
 	var mvthresh = 44;
 
 	function unbox() {
 		qsr('.selbox');
 		ebi('gfiles').style.removeProperty('pointer-events')
 		ebi('wrap').style.removeProperty('user-select')
-		
+
 		if (selbox) {
 			console.log(selbox)
 			window.getSelection().removeAllRanges();
 		}
-		
+
 		is_selma = false;
 		dragging = false;
 		fwrap = null;
@@ -10027,17 +10109,17 @@ function reload_browser() {
 	function sel_start(e) {
 		if (e.button !== 0 && e.type !== 'touchstart') return;
 		if (!thegrid.en || !treectl.dsel) return;
-		if (e.target.closest('#widget,#ops,.opview,.doc')) return;
+		if (e.target.closest('#widget,#ops,.opview,.doc,.bbox-open')) return;
 
 		if (e.target.closest('#gfiles'))
-			ebi('gfiles').style.userSelect = "none"
+			ebi('gfiles').style.userSelect = "none";
 
 		var pos = getpp(e);
 		startx = pos.x;
 		starty = pos.y;
 		is_selma = true;
 		ttimer = null;
-		
+
 		if (e.type === 'touchstart') {
 			ttimer = setTimeout(function() {
 				ttimer = null;
@@ -10045,7 +10127,7 @@ function reload_browser() {
 			}, lpdelay);
 		}
 	}
-	
+
 	function start_drag() {
 		if (dragging) return;
 
@@ -10056,7 +10138,7 @@ function reload_browser() {
 
 		ebi('gfiles').style.pointerEvents = 'none';
 	}
-	
+
 	function sel_move(e) {
 		if (!is_selma) return;
 		var pos = getpp(e);
@@ -10071,7 +10153,9 @@ function reload_browser() {
 			return;
 		}
 		if (!dragging && dist > mvthresh && !window.getSelection().toString()) {
-			if (fwrap = e.target.closest('#wrap')) 
+			if (e.target instanceof Element)
+				fwrap = e.target.closest('#wrap');
+			if (fwrap)
 				fwrap.style.userSelect = 'none';
 			else return;
 			start_drag();
@@ -10115,11 +10199,12 @@ function reload_browser() {
 
 		window.addEventListener('dragstart', function(e) {
 			if (treectl.dsel && (is_selma || dragging)) {
-				e.preventDefault();
+				if (!QS('body.bbox-open'))
+					ev(e);
 			}
 		});
 	}
-	
+
 	dsel_init();
 })();
 
@@ -10162,7 +10247,7 @@ var mpss = (function() {
 
 		var gain = afilt.ssg.gain;
 		var duration = ae.duration || 0;
-	
+
 		var slimit = duration * (config.sthresh / 100);
 		var elimit = duration * (1 - (config.etresh / 100));
 		var in_limits = ae.currentTime < slimit || ae.currentTime > elimit;

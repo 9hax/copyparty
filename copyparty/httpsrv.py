@@ -1,8 +1,7 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import hashlib
-import math
 import os
 import re
 import socket
@@ -180,6 +179,8 @@ class HttpSrv(object):
         self.u2idx_free: dict[str, U2idx] = {}
         self.u2idx_n = 0
 
+        self.wopi_files: dict[str, dict[str, Any]] = {}
+
         assert jinja2  # type: ignore  # !rm
         env = jinja2.Environment()
         env.loader = jinja2.FunctionLoader(lambda f: load_jinja2_resource(self.E, f))
@@ -195,6 +196,7 @@ class HttpSrv(object):
             "shares",
             "splash",
             "svcs",
+            "wopi",
         ]
         self.j2 = {x: env.get_template(x + ".html") for x in jn}
         self.j2["opds"] = env.get_template("opds.xml")
@@ -315,7 +317,7 @@ class HttpSrv(object):
 
         self.srvs.append(sck)
         self.bound.add((ip, port))
-        self.nclimax = math.ceil(self.args.nc * 1.0 / nlisteners)
+        self.nclimax = -int(-self.args.nc // nlisteners)
         Daemon(
             self.thr_listen,
             "httpsrv-n{}-listen-{}-{}".format(self.nid or "0", ip, port),
@@ -700,7 +702,7 @@ class HttpSrv(object):
             if not fmts:
                 continue
             log("starting for volume /%s" % (vn.vpath,), 6)
-            g = vn.walk("x", "/", [], LEELOO_DALLAS, [[True]], 2, scandir, False, False)
+            g = vn.walk("", "/", [], LEELOO_DALLAS, [[True]], 2, scandir, False, False)
             g = gfilter2(g, self, vn.vpath, fmts.split(","))
             for f in g:
                 nfiles += 1

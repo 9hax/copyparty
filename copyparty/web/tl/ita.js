@@ -39,6 +39,7 @@ Ls.ita = {
 			["ctrl-V", "incolla (sposta/copia) qui"],
 			["Y", "scarica selezionati"],
 			["F2", "rinomina selezionati"],
+			["F4", "aggiorna"], //m
 
 			"file-list-sel",
 			["spazio", "alterna selezione file"],
@@ -572,9 +573,10 @@ Ls.ita = {
 	"u_https1": "dovresti",
 	"u_https2": "passare a https",
 	"u_https3": "per prestazioni migliori",
-	"u_ancient": 'il tuo browser è incredibilmente antico -- forse dovresti <a href="#" onclick="goto(\'bup\')">usare bup invece</a>',
+	"u_ancient": 'il tuo browser è incredibilmente antico -- forse dovresti <a href="#" id="u2nah">usare bup invece</a>',
 	"u_nowork": "serve firefox 53+ o chrome 57+ o iOS 11+",
 	"tail_2old": "serve firefox 105+ o chrome 71+ o iOS 14.5+",
+	"b2old": 'il tuo browser è troppo vecchio', //m
 	"u_nodrop": 'il tuo browser è troppo vecchio per il caricamento drag-and-drop',
 	"u_notdir": "quella non è una cartella!\n\nil tuo browser è troppo vecchio,\nprova dragdrop invece",
 	"u_uri": "per trascinare immagini da altre finestre del browser,\nrilasciale sul pulsante upload grande",
@@ -658,6 +660,7 @@ Ls.ita = {
 	"rc_pla": "riproduci come audio", //m
 	"rc_txt": "apri nel visualizzatore di file", //m
 	"rc_md": "apri nell’editor di testo", //m
+	"rc_wopi": "apri nell’editor office", //m
 	"rc_dl": "scarica", //m
 	"rc_zip": "scarica come archivio", //m
 	"rc_cpl": "copia link", //m

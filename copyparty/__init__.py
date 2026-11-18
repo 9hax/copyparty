@@ -1,5 +1,5 @@
 # coding: utf-8
-from __future__ import print_function, unicode_literals
+from __future__ import division, print_function, unicode_literals
 
 import os
 import platform
@@ -40,6 +40,9 @@ VT100 = "--ansi" in sys.argv or (
 )
 # introduced in anniversary update
 
+zs = os.environ.get("PRTY_CONFIG", "")
+CFG_DEF = [zs] if zs else []
+
 ANYWIN = WINDOWS or sys.platform in ["msys", "cygwin"]
 
 MACOS = platform.system() == "Darwin"
@@ -77,9 +80,10 @@ web/deps/busy.mp3
 web/deps/easymde.css
 web/deps/easymde.js
 web/deps/marked.js
-web/deps/fuse.py
+web/deps/mfusepy.py
 web/deps/mini-fa.css
 web/deps/mini-fa.woff
+web/deps/orbitron.woff2
 web/deps/prism.css
 web/deps/prism.js
 web/deps/prismd.css
@@ -134,7 +138,7 @@ web/tl/vie.js
 web/ui.css
 web/up2k.js
 web/util.js
-web/w.hash.js
+web/wopi.html
 """
 RES = set(zs.strip().split("\n"))
 RESM = {
